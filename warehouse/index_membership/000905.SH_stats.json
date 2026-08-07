@@ -1,0 +1,37 @@
+{
+  "index_id": "000905.SH",
+  "index_name": "中证500",
+  "source_files": [
+    "500_01.xlsx",
+    "500_02.xlsx",
+    "500_03.xlsx",
+    "500_04.xlsx"
+  ],
+  "snapshots": 76,
+  "snapshot_first": "2019-01-01",
+  "snapshot_last": "2026-04-01",
+  "members_min": 500,
+  "members_max": 500,
+  "expected_size": 500,
+  "size_mismatch_snapshots": [],
+  "weight_sum_min": 0.99984,
+  "weight_sum_max": 1.00019,
+  "weight_missing_rows": 0,
+  "missing_months": [
+    "2020-09",
+    "2020-10",
+    "2020-11",
+    "2020-12",
+    "2021-01",
+    "2021-02",
+    "2021-03",
+    "2021-04",
+    "2023-01",
+    "2023-02",
+    "2023-03",
+    "2023-04"
+  ],
+  "unique_assets": 1074,
+  "rows": 38000,
+  "dropped_incomplete_snapshots": []
+}

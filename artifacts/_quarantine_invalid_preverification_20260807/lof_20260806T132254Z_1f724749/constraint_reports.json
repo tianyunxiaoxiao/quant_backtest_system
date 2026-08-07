@@ -1,0 +1,102 @@
+{
+  "constraint_reports": [
+    {
+      "constraint": "max_single_weight",
+      "enabled": true,
+      "limit": 0.05,
+      "n_checked": 1273,
+      "n_violations": 52,
+      "max_observed": 0.06684277529199867,
+      "action": "capped_and_redistributed",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": []
+      }
+    },
+    {
+      "constraint": "min_holdings",
+      "enabled": true,
+      "limit": 20.0,
+      "n_checked": 1273,
+      "n_violations": 22,
+      "max_observed": 0.0,
+      "action": "warn_if_below",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": []
+      }
+    },
+    {
+      "constraint": "max_cash_ratio",
+      "enabled": true,
+      "limit": 0.05,
+      "n_checked": 1273,
+      "n_violations": 1231,
+      "max_observed": 1.0,
+      "action": "warn_if_above",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": []
+      }
+    },
+    {
+      "constraint": "max_adv_participation",
+      "enabled": true,
+      "limit": 0.1,
+      "n_checked": 234,
+      "n_violations": 6,
+      "max_observed": null,
+      "action": "partial_fill",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": []
+      }
+    },
+    {
+      "constraint": "max_industry_deviation",
+      "enabled": false,
+      "limit": null,
+      "n_checked": 0,
+      "n_violations": 0,
+      "max_observed": null,
+      "action": "not_implemented_no_data",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": []
+      }
+    },
+    {
+      "constraint": "max_active_style_exposure",
+      "enabled": false,
+      "limit": null,
+      "n_checked": 0,
+      "n_violations": 0,
+      "max_observed": null,
+      "action": "monitor_only",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": []
+      }
+    },
+    {
+      "constraint": "max_turnover",
+      "enabled": false,
+      "limit": null,
+      "n_checked": 1273,
+      "n_violations": 0,
+      "max_observed": null,
+      "action": "not_enforced_v1",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": []
+      }
+    }
+  ]
+}

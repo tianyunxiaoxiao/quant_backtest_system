@@ -1,0 +1,27 @@
+{
+  "index_id": "000300.SH",
+  "index_name": "沪深300",
+  "source_files": [
+    "300_01.xlsx",
+    "300_02.xlsx",
+    "300_03.xlsx"
+  ],
+  "snapshots": 88,
+  "snapshot_first": "2019-01-01",
+  "snapshot_last": "2026-05-01",
+  "members_min": 300,
+  "members_max": 300,
+  "expected_size": 300,
+  "size_mismatch_snapshots": [],
+  "weight_sum_min": 0.99988,
+  "weight_sum_max": 1.0001,
+  "weight_missing_rows": 0,
+  "missing_months": [
+    "2021-10"
+  ],
+  "unique_assets": 509,
+  "rows": 26400,
+  "dropped_incomplete_snapshots": [
+    "2021-10-01"
+  ]
+}

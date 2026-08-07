@@ -1,0 +1,356 @@
+{
+  "constraint_reports": [
+    {
+      "constraint": "full_investment",
+      "enabled": true,
+      "limit": 1.0,
+      "n_checked": 65,
+      "n_violations": 0,
+      "max_observed": 5.551115123125783e-16,
+      "action": "account_identity_enforced",
+      "violations": {
+        "index": [],
+        "columns": [
+          "date",
+          "observed",
+          "limit",
+          "absolute_error"
+        ],
+        "data": [],
+        "index_name": null,
+        "column_names": [
+          null
+        ],
+        "dtypes": [
+          "datetime64[us]",
+          "float64",
+          "float64",
+          "float64"
+        ]
+      }
+    },
+    {
+      "constraint": "max_single_weight",
+      "enabled": true,
+      "limit": 0.05,
+      "n_checked": 65,
+      "n_violations": 20,
+      "max_observed": 0.054608292463854693,
+      "action": "target_capped; post_close_drift_or_unfilled_reported",
+      "violations": {
+        "index": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+          "16",
+          "17",
+          "18",
+          "19"
+        ],
+        "columns": [
+          "date",
+          "asset_id",
+          "observed",
+          "limit",
+          "excess"
+        ],
+        "data": [
+          [
+            "2019-07-01T00:00:00",
+            "600179.SH",
+            0.05220275010227682,
+            0.05,
+            0.0022027501022768153
+          ],
+          [
+            "2019-07-02T00:00:00",
+            "600179.SH",
+            0.054608292463854693,
+            0.05,
+            0.004608292463854691
+          ],
+          [
+            "2019-07-02T00:00:00",
+            "600338.SH",
+            0.05051676498975632,
+            0.05,
+            0.0005167649897563145
+          ],
+          [
+            "2019-07-03T00:00:00",
+            "600179.SH",
+            0.052918142307608045,
+            0.05,
+            0.0029181423076080418
+          ],
+          [
+            "2019-07-03T00:00:00",
+            "600338.SH",
+            0.05114315112300665,
+            0.05,
+            0.0011431511230066485
+          ],
+          [
+            "2019-07-04T00:00:00",
+            "600179.SH",
+            0.053690198979534434,
+            0.05,
+            0.0036901989795344314
+          ],
+          [
+            "2019-07-04T00:00:00",
+            "600338.SH",
+            0.05076848766790569,
+            0.05,
+            0.0007684876679056873
+          ],
+          [
+            "2019-07-05T00:00:00",
+            "600179.SH",
+            0.05258603849271435,
+            0.05,
+            0.0025860384927143473
+          ],
+          [
+            "2019-07-05T00:00:00",
+            "600338.SH",
+            0.05069541008722336,
+            0.05,
+            0.000695410087223354
+          ],
+          [
+            "2019-07-08T00:00:00",
+            "600179.SH",
+            0.05294733058483682,
+            0.05,
+            0.002947330584836816
+          ],
+          [
+            "2019-07-08T00:00:00",
+            "600338.SH",
+            0.05065960889771966,
+            0.05,
+            0.0006596088977196546
+          ],
+          [
+            "2019-07-09T00:00:00",
+            "600179.SH",
+            0.05354135502920174,
+            0.05,
+            0.0035413550292017343
+          ],
+          [
+            "2019-07-10T00:00:00",
+            "600179.SH",
+            0.053385685093359066,
+            0.05,
+            0.003385685093359063
+          ],
+          [
+            "2019-07-11T00:00:00",
+            "600179.SH",
+            0.053437440048847505,
+            0.05,
+            0.0034374400488475024
+          ],
+          [
+            "2019-07-12T00:00:00",
+            "600179.SH",
+            0.05285075002312377,
+            0.05,
+            0.002850750023123766
+          ],
+          [
+            "2019-07-12T00:00:00",
+            "600338.SH",
+            0.05065690604007656,
+            0.05,
+            0.0006569060400765589
+          ],
+          [
+            "2019-07-15T00:00:00",
+            "600179.SH",
+            0.05079233817241169,
+            0.05,
+            0.0007923381724116857
+          ],
+          [
+            "2019-07-16T00:00:00",
+            "600179.SH",
+            0.05001752677558193,
+            0.05,
+            1.752677558192889e-05
+          ],
+          [
+            "2019-07-30T00:00:00",
+            "600179.SH",
+            0.05127240084998222,
+            0.05,
+            0.0012724008499822165
+          ],
+          [
+            "2019-07-31T00:00:00",
+            "600179.SH",
+            0.05007216479893241,
+            0.05,
+            7.21647989324059e-05
+          ]
+        ],
+        "index_name": null,
+        "column_names": [
+          null
+        ],
+        "dtypes": [
+          "datetime64[us]",
+          "str",
+          "float64",
+          "float64",
+          "float64"
+        ]
+      }
+    },
+    {
+      "constraint": "min_holdings",
+      "enabled": true,
+      "limit": 20.0,
+      "n_checked": 65,
+      "n_violations": 0,
+      "max_observed": 108.0,
+      "action": "warn_if_below",
+      "violations": {
+        "index": [],
+        "columns": [
+          "date",
+          "observed",
+          "limit"
+        ],
+        "data": [],
+        "index_name": null,
+        "column_names": [
+          null
+        ],
+        "dtypes": [
+          "datetime64[us]",
+          "int64",
+          "int64"
+        ]
+      }
+    },
+    {
+      "constraint": "max_cash_ratio",
+      "enabled": true,
+      "limit": 0.05,
+      "n_checked": 65,
+      "n_violations": 0,
+      "max_observed": 0.010870216107487084,
+      "action": "warn_if_above",
+      "violations": {
+        "index": [],
+        "columns": [
+          "date",
+          "observed",
+          "limit"
+        ],
+        "data": [],
+        "index_name": null,
+        "column_names": [
+          null
+        ],
+        "dtypes": [
+          "datetime64[us]",
+          "float64",
+          "float64"
+        ]
+      }
+    },
+    {
+      "constraint": "max_adv_participation",
+      "enabled": true,
+      "limit": 0.1,
+      "n_checked": 507,
+      "n_violations": 0,
+      "max_observed": 0.0999997709566715,
+      "action": "partial_fill; cap_bindings=3",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": [],
+        "index_name": null,
+        "column_names": [
+          null
+        ],
+        "dtypes": []
+      }
+    },
+    {
+      "constraint": "max_turnover",
+      "enabled": false,
+      "limit": null,
+      "n_checked": 65,
+      "n_violations": 0,
+      "max_observed": 0.8495915444880023,
+      "action": "target_transition_scaled_and_execution_capped",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": [],
+        "index_name": null,
+        "column_names": [
+          null
+        ],
+        "dtypes": []
+      }
+    },
+    {
+      "constraint": "max_industry_deviation",
+      "enabled": false,
+      "limit": null,
+      "n_checked": 0,
+      "n_violations": 0,
+      "max_observed": null,
+      "action": "not_implemented_no_data",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": [],
+        "index_name": null,
+        "column_names": [
+          null
+        ],
+        "dtypes": []
+      }
+    },
+    {
+      "constraint": "max_active_style_exposure",
+      "enabled": false,
+      "limit": null,
+      "n_checked": 0,
+      "n_violations": 0,
+      "max_observed": null,
+      "action": "monitor_only",
+      "violations": {
+        "index": [],
+        "columns": [],
+        "data": [],
+        "index_name": null,
+        "column_names": [
+          null
+        ],
+        "dtypes": []
+      }
+    }
+  ]
+}

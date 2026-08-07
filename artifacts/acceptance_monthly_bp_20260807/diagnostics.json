@@ -1,0 +1,77 @@
+{
+  "timeline": {
+    "signal_time": "close",
+    "order_lag_days": 1,
+    "fill_lag_days": 0,
+    "return_lag_days": 1,
+    "rebalance_frequency": "monthly",
+    "fill_price_field": "adj_vwap"
+  },
+  "data_quality": {
+    "factor_coverage": 0.840767,
+    "benchmark_basis": "pit_monthly_weight_synthetic",
+    "n_rebalance_dates": 86,
+    "n_trading_days": 1755,
+    "n_assets": 1074,
+    "price_missing_members": {
+      "count": 46,
+      "assets": [
+        "000046.SZ",
+        "000418.SZ",
+        "000540.SZ",
+        "000587.SZ",
+        "000667.SZ",
+        "000671.SZ",
+        "000732.SZ",
+        "000961.SZ",
+        "002002.SZ",
+        "002013.SZ",
+        "002118.SZ",
+        "002147.SZ",
+        "002280.SZ",
+        "002308.SZ",
+        "002359.SZ",
+        "002477.SZ",
+        "002503.SZ",
+        "002505.SZ",
+        "002509.SZ",
+        "002665.SZ",
+        "002699.SZ",
+        "300156.SZ",
+        "300202.SZ",
+        "300297.SZ",
+        "300630.SZ",
+        "600068.SH",
+        "600086.SH",
+        "600122.SH",
+        "600240.SH",
+        "600260.SH",
+        "600270.SH",
+        "600277.SH",
+        "600291.SH",
+        "600297.SH",
+        "600317.SH",
+        "600393.SH",
+        "600466.SH",
+        "600565.SH",
+        "600614.SH",
+        "600687.SH",
+        "600705.SH",
+        "600804.SH",
+        "600811.SH",
+        "600823.SH",
+        "600978.SH",
+        "603056.SH"
+      ],
+      "max_snapshot_weight": 0.0573,
+      "mean_snapshot_weight": 0.01820287878787879
+    }
+  },
+  "warnings": [
+    "账户恒等式最大残差: 0.0000 bps"
+  ],
+  "disclosures": [
+    "请求开始日 2018-01-01 早于首个可用 PIT 成分生效日; 有效回测从 2019-01-01 开始, 未做历史回填",
+    "46 只历史成分股缺少行情数据 (疑似已退市), 最大单期权重缺口 5.73%; 存在幸存者偏差"
+  ]
+}

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qbt"
+version = "1.0.0"
+description = "指数内多头因子回测框架 (Quant Backtest Toolkit)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy==2.5.1",
+    "pandas==3.0.5",
+    "pyarrow==25.0.0",
+    "scipy==1.18.0",
+    "matplotlib==3.11.1",
+    "openpyxl==3.1.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-cov==7.0.0",
+    "ruff==0.14.10",
+    "mypy==1.19.1",
+]
+
+[project.scripts]
+qbt-backtest = "qbt.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra -q --strict-markers"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "regression: marks tests as regression tests",
+]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = false
+warn_unused_ignores = true
+ignore_missing_imports = true

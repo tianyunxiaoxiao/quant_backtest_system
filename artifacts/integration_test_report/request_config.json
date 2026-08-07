@@ -1,0 +1,104 @@
+{
+  "start_date": "2019-06-01",
+  "end_date": "2019-09-30",
+  "oos_start": "2023-01-01",
+  "selection_fraction": 0.3,
+  "weighting_method": "factor_strength",
+  "rebalance_frequency": "monthly",
+  "signal_lag_days": 1,
+  "initial_capital": 100000000.0,
+  "config_version": "v1.0.0",
+  "clock": {
+    "signal_time": "close",
+    "order_lag_days": 1,
+    "fill_lag_days": 0,
+    "return_lag_days": 1,
+    "drop_incomplete": true
+  },
+  "selection": {
+    "selection_fraction": 0.3,
+    "eligibility_requires_tradable": true,
+    "eligibility_requires_valid_factor": true,
+    "tie_break": "asset_id_asc",
+    "min_holdings": 20,
+    "fail_on_insufficient_universe": false
+  },
+  "weighting": {
+    "method": "factor_strength",
+    "cutoff_mode": "first_rejected",
+    "allow_equal_weight_fallback": true,
+    "max_weight": 0.05,
+    "cash_buffer": 0.01
+  },
+  "constraints": {
+    "enforce_full_investment": true,
+    "max_single_weight": 0.05,
+    "min_holdings": 20,
+    "max_industry_deviation": null,
+    "max_active_style_exposure": null,
+    "max_turnover": null,
+    "max_adv_participation": 0.1,
+    "max_cash_ratio": 0.05,
+    "force_sell_index_exits": true
+  },
+  "costs": {
+    "commission_rate": 0.00025,
+    "min_commission": 0.0,
+    "transfer_fee_schedule": [
+      {
+        "effective_date": "1900-01-01",
+        "value": 2e-05
+      },
+      {
+        "effective_date": "2022-04-29",
+        "value": 1e-05
+      }
+    ],
+    "stamp_duty_schedule": [
+      {
+        "effective_date": "1900-01-01",
+        "value": 0.001
+      },
+      {
+        "effective_date": "2008-09-19",
+        "value": 0.001
+      },
+      {
+        "effective_date": "2023-08-28",
+        "value": 0.0005
+      }
+    ],
+    "stamp_duty_side": "sell",
+    "slippage_bps": 12.0,
+    "impact_model": "embedded_in_slippage"
+  },
+  "execution": {
+    "fill_price_field": "adj_vwap",
+    "lot_size": 100,
+    "star_market_lot_size": 200,
+    "allow_odd_lot_sell": true,
+    "sell_before_buy": true,
+    "sell_proceeds_available_same_day": true,
+    "unfilled_policy": "cancel_at_close",
+    "max_adv_participation": 0.1,
+    "limit_touch_buffer": 0.005,
+    "split_large_orders": false,
+    "max_split_days": 1
+  },
+  "regression": {
+    "risk_free_annual": 0.0,
+    "trading_days_per_year": 252,
+    "rolling_window": 252,
+    "min_observations": 120,
+    "newey_west_lags": 5,
+    "report_both_tstats": true
+  },
+  "business_summary": {
+    "selection_fraction": 0.3,
+    "weighting_method": "factor_strength",
+    "rebalance_frequency": "monthly",
+    "signal_lag_days": 1,
+    "fill_price_field": "adj_vwap",
+    "initial_capital": 100000000.0
+  }
+}

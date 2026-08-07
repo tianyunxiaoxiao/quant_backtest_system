@@ -1,0 +1,261 @@
+{
+  "run_id": "lof_20260806T130224Z_d29ee104",
+  "strategy_id": "reversal_20d_000905.SH_sf0.3_wmfactor_strength_cvv1.0.0",
+  "factor_id": "reversal_20d",
+  "index_id": "000905.SH",
+  "code_version": "unversioned",
+  "config_version": "v1.0.0",
+  "created_at": "2026-08-06T13:02:24+00:00",
+  "config": {
+    "start_date": "2019-06-01",
+    "end_date": "2019-09-30",
+    "oos_start": "2024-04-01",
+    "selection_fraction": 0.3,
+    "weighting_method": "factor_strength",
+    "rebalance_frequency": "monthly",
+    "signal_lag_days": 1,
+    "initial_capital": 100000000.0,
+    "config_version": "v1.0.0",
+    "clock": {
+      "signal_time": "close",
+      "order_lag_days": 1,
+      "fill_lag_days": 0,
+      "return_lag_days": 1,
+      "drop_incomplete": true
+    },
+    "selection": {
+      "selection_fraction": 0.3,
+      "eligibility_requires_tradable": true,
+      "eligibility_requires_valid_factor": true,
+      "tie_break": "asset_id_asc",
+      "min_holdings": 20,
+      "fail_on_insufficient_universe": false
+    },
+    "weighting": {
+      "method": "factor_strength",
+      "cutoff_mode": "first_rejected",
+      "allow_equal_weight_fallback": true,
+      "max_weight": 0.05,
+      "cash_buffer": 0.01
+    },
+    "constraints": {
+      "enforce_full_investment": true,
+      "max_single_weight": 0.05,
+      "min_holdings": 20,
+      "max_industry_deviation": null,
+      "max_active_style_exposure": null,
+      "max_turnover": null,
+      "max_adv_participation": 0.1,
+      "max_cash_ratio": 0.05,
+      "force_sell_index_exits": true
+    },
+    "costs": {
+      "commission_rate": 0.00025,
+      "min_commission": 0.0,
+      "transfer_fee_schedule": [
+        {
+          "effective_date": "1900-01-01",
+          "value": 2e-05
+        },
+        {
+          "effective_date": "2022-04-29",
+          "value": 1e-05
+        }
+      ],
+      "stamp_duty_schedule": [
+        {
+          "effective_date": "1900-01-01",
+          "value": 0.001
+        },
+        {
+          "effective_date": "2008-09-19",
+          "value": 0.001
+        },
+        {
+          "effective_date": "2023-08-28",
+          "value": 0.0005
+        }
+      ],
+      "stamp_duty_side": "sell",
+      "slippage_bps": 12.0,
+      "impact_model": "embedded_in_slippage"
+    },
+    "execution": {
+      "fill_price_field": "adj_open",
+      "lot_size": 100,
+      "star_market_lot_size": 200,
+      "allow_odd_lot_sell": true,
+      "sell_before_buy": true,
+      "sell_proceeds_available_same_day": true,
+      "unfilled_policy": "cancel_at_close",
+      "max_adv_participation": 0.1,
+      "limit_touch_buffer": 0.005,
+      "split_large_orders": true,
+      "max_split_days": 3
+    },
+    "regression": {
+      "risk_free_annual": 0.0,
+      "trading_days_per_year": 252,
+      "rolling_window": 252,
+      "min_observations": 120,
+      "newey_west_lags": 5,
+      "report_both_tstats": true
+    },
+    "business_summary": {
+      "selection_fraction": 0.3,
+      "weighting_method": "factor_strength",
+      "rebalance_frequency": "monthly",
+      "signal_lag_days": 1,
+      "fill_price_field": "adj_open",
+      "initial_capital": 100000000.0
+    }
+  },
+  "dataset_refs": [
+    {
+      "name": "index_membership:000905.SH",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/指数月度成分股",
+      "content_hash": "302a3b8089db065365b3277dcadec9fc76d9d7225e069b7a4ba7c40fbcffeadd",
+      "rows": 38000,
+      "columns": 4,
+      "date_min": "2019-01-01",
+      "date_max": "2026-04-01",
+      "notes": "monthly PIT snapshots; missing_months=12"
+    },
+    {
+      "name": "daily_prices",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/warehouse/daily_prices",
+      "content_hash": "7eaa60135868cb6f70078a7bea1826d46a241478364e74bc2176f3e7f0b0d292",
+      "rows": 2386760,
+      "columns": 1074,
+      "date_min": "2018-03-08",
+      "date_max": "2019-09-30",
+      "notes": "partitions=12"
+    },
+    {
+      "name": "benchmark_returns",
+      "uri": "synthetic:pit_monthly_weights",
+      "content_hash": "2552aa7fc1714dbbb7d78396dc56098517bba3bea17e4d0bde0c614bc5449a66",
+      "rows": 84,
+      "columns": 1,
+      "date_min": "2019-06-03",
+      "date_max": "2019-09-30",
+      "notes": "pit_monthly_weight_synthetic"
+    },
+    {
+      "name": "style_exposures",
+      "uri": "derived:proxy_styles_v1",
+      "content_hash": "c7e96881af88a933e599398102ac0d1cad055720b1cf884be0c597780be97cb5",
+      "rows": 84,
+      "columns": 5,
+      "date_min": "2019-06-03",
+      "date_max": "2019-09-30",
+      "notes": "present=['Liquidity', 'Momentum', 'Size', 'Value', 'Volatility']; missing=['Growth', 'Quality', 'Leverage']"
+    }
+  ],
+  "artifact_uri": "artifacts/long_only_factor_backtests/lof_20260806T130224Z_012b1e05",
+  "environment": {
+    "python": "3.11+",
+    "backtester": "qbt.v1"
+  },
+  "disclosures": [
+    "价格与收益在复权价格空间计算, 数量与估值使用复权股数, 等价于分红再投资的全收益近似。",
+    "历史退市股与历史 ST 状态未包含在当前数据源中, 存在幸存者偏差与 ST 状态推断缺失。",
+    "基准收益由 PIT 指数月度权重合成 (buy-and-hold within month), 与官方指数存在跟踪误差; 拿到官方指数点位后可替换。",
+    "风格暴露为基于价量/估值字段自建的简化代理 (非 Barra), Growth/Quality/Leverage 因缺财务数据标记为缺失。",
+    "T+1 开盘价成交 (导师 B1 确认), 整手买入、卖出允许零股, 先卖后买, 未成交订单当日取消。",
+    "196 只历史成分股缺少行情数据 (疑似已退市), 最大单期权重缺口 17.16%; 存在幸存者偏差"
+  ],
+  "result_hash": "6c3fcb077665b88f3b0ee59777c9633769da40f781a9dfff713bc9da68329e8d",
+  "artifact_refs": [
+    {
+      "name": "selected_members",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/selected_members.parquet",
+      "content_hash": "b90b56b97cdf7f394eb3b31ab0b879eaffc784f882cc561ef98e1a44dbb90bcb",
+      "bytes": 511851
+    },
+    {
+      "name": "target_weights",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/target_weights.parquet",
+      "content_hash": "5e6c6a0017a314b8ffc4e780020944a7ea05db25943e4b65a7e634cda94205dd",
+      "bytes": 709896
+    },
+    {
+      "name": "actual_weights",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/actual_weights.parquet",
+      "content_hash": "9979391343f8632051e0f37f5b646aafb932f7bd9d3c53fbbd83038afb1879bf",
+      "bytes": 679451
+    },
+    {
+      "name": "orders",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/orders.parquet",
+      "content_hash": "78d707dee92e93376fe8b7bb8e9a1b06587b9c342fe68c1ebad684cc27fb1a93",
+      "bytes": 26864
+    },
+    {
+      "name": "fills",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/fills.parquet",
+      "content_hash": "e15fae739c28227ef620a2bdbde780ae5683d3216185ec2de47780042c53f429",
+      "bytes": 51854
+    },
+    {
+      "name": "holdings",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/holdings.parquet",
+      "content_hash": "ec443577b6e302eff9fe73f45c96000f8913d73d82c0374865cf97eefe69294e",
+      "bytes": 672240
+    },
+    {
+      "name": "cash_ledger",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/cash_ledger.parquet",
+      "content_hash": "0eddb8364a6253d60fbb51f12f76c032f47981357401156204d7557cbf08aa43",
+      "bytes": 10842
+    },
+    {
+      "name": "daily_returns",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/daily_returns.parquet",
+      "content_hash": "0281baaa7f4101477c08fa959fe694140b175d39b30cdb4d9fcb1dda65456be6",
+      "bytes": 11746
+    },
+    {
+      "name": "costs",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/costs.parquet",
+      "content_hash": "06596eae97f2bd0e86cef75b904b9bec74a9ad872fcd2c57c7d1ffff503420d0",
+      "bytes": 6447
+    },
+    {
+      "name": "style_exposures",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/style_exposures.parquet",
+      "content_hash": "9a9bee297a5733b986bb1b707dd9336e6b6540def1f18860d678a30e84370532",
+      "bytes": 8241
+    },
+    {
+      "name": "performance_report",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/performance_report.json",
+      "content_hash": "068d0171f26cbafcdb540615304143c1004126a3ac0fb279d9e84c39f5f761c2",
+      "bytes": 8486
+    },
+    {
+      "name": "alpha_beta",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/alpha_beta.json",
+      "content_hash": "aca56006cfc89f509c5324caf522019b9316601a5e8c13861feb4d126e309f06",
+      "bytes": 31305
+    },
+    {
+      "name": "index_selection_report",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/index_selection_report.json",
+      "content_hash": "087c3622f8a282ecc026832ec9a7538af3b985dfc18ce06b9cfff23661ed2216",
+      "bytes": 50358
+    },
+    {
+      "name": "constraint_reports",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/constraint_reports.json",
+      "content_hash": "fc9a51eeb7045ba4031107dae876f0c348407511166816ad3cbac4265cf4a4aa",
+      "bytes": 2172
+    },
+    {
+      "name": "request_config",
+      "uri": "/Users/a1/Desktop/添橙/5days20260806/quant_backtest_system/artifacts/test_report/request_config.json",
+      "content_hash": "95f40d20ed66046e8f74beb0320077b715c24bdfef3ec889f327c94e9cddaf7b",
+      "bytes": 2641
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "files_total": 5495,
+  "files_ok": 5494,
+  "files_failed": 1,
+  "rows": 10638434,
+  "assets": 5494,
+  "date_min": "2015-06-01",
+  "date_max": "2026-04-07",
+  "ohlc_violation_rows": 0,
+  "zero_volume_rows": 201695,
+  "partitions": [
+    "warehouse/daily_prices/daily_prices_2015.parquet",
+    "warehouse/daily_prices/daily_prices_2016.parquet",
+    "warehouse/daily_prices/daily_prices_2017.parquet",
+    "warehouse/daily_prices/daily_prices_2018.parquet",
+    "warehouse/daily_prices/daily_prices_2019.parquet",
+    "warehouse/daily_prices/daily_prices_2020.parquet",
+    "warehouse/daily_prices/daily_prices_2021.parquet",
+    "warehouse/daily_prices/daily_prices_2022.parquet",
+    "warehouse/daily_prices/daily_prices_2023.parquet",
+    "warehouse/daily_prices/daily_prices_2024.parquet",
+    "warehouse/daily_prices/daily_prices_2025.parquet",
+    "warehouse/daily_prices/daily_prices_2026.parquet"
+  ]
+}

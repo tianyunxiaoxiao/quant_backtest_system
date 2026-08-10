@@ -7,18 +7,26 @@
 
 from __future__ import annotations
 
-import warnings
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 
 import numpy as np
-
 import pandas as pd
 
-warnings.filterwarnings("ignore")
+ALL_A_INDEX_ID = "ALL_A_EQ"
+ALL_A_INDEX_NAME = "全A等权"
+DEFAULT_INDEX_ID = ALL_A_INDEX_ID
 
-__all__ = ["IndexSpec", "INDEX_SPECS", "ingest_index_membership", "expand_monthly_to_daily"]
+__all__ = [
+    "IndexSpec",
+    "INDEX_SPECS",
+    "ALL_A_INDEX_ID",
+    "ALL_A_INDEX_NAME",
+    "DEFAULT_INDEX_ID",
+    "ingest_index_membership",
+    "expand_monthly_to_daily",
+]
 
 
 @dataclass(frozen=True)

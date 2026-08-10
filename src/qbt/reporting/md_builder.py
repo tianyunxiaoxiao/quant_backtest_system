@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
 import pandas as pd
@@ -270,10 +269,18 @@ class MarkdownReportBuilder:
     def _disclosures(self, result: LongOnlyFactorBacktestResult) -> list[str]:
         lines = ["## 9. 数据缺失、排除与风险披露", ""]
         if not result.diagnostics.exclusion_reasons.empty:
-            totals = result.diagnostics.exclusion_reasons.sum(numeric_only=True)
             lines.append("### 选股排除汇总")
             lines.append("")
-            exclusion_table = totals.rename("count").rename_axis("reason").reset_index()
+            exclusions = result.diagnostics.exclusion_reasons
+            if "reason" in exclusions.columns:
+                exclusion_table = (
+                    exclusions["reason"].value_counts(sort=False).rename("count")
+                    .rename_axis("reason").reset_index()
+                )
+                exclusion_table = exclusion_table[exclusion_table["count"] > 0]
+            else:
+                totals = exclusions.sum(numeric_only=True)
+                exclusion_table = totals.rename("count").rename_axis("reason").reset_index()
             lines.extend(self._table(exclusion_table))
             lines.append("")
         for warning in result.diagnostics.warnings:

@@ -1,6 +1,6 @@
 """请求与配置契约 (规范 6 / 17-P0)。
 
-研究员入口只需 factor + index_id; 其余口径由嵌套默认配置提供,
+研究员入口只需 factor + 可选 index_id; 省略指数时使用全A等权基准,
 但完整解析后的配置必须写入运行记录 (规范 6 末段)。
 """
 
@@ -328,15 +328,21 @@ class LongOnlyFactorBacktestConfig:
 
 @dataclass(frozen=True)
 class LongOnlyFactorBacktestRequest:
+    """研究请求; omitted ``index_id`` resolves to ``ALL_A_EQ`` (全A等权)."""
+
     factor: FactorFrame
-    index_id: str
+    index_id: str | None = None
     config: LongOnlyFactorBacktestConfig = field(
         default_factory=LongOnlyFactorBacktestConfig
     )
 
     def __post_init__(self) -> None:
-        if not self.index_id:
-            raise ValueError("index_id 不能为空")
+        if self.index_id is None:
+            object.__setattr__(self, "index_id", "ALL_A_EQ")
+        elif not isinstance(self.index_id, str) or not self.index_id.strip():
+            raise ValueError("index_id 必须是非空字符串, 或省略以使用全A等权")
+        else:
+            object.__setattr__(self, "index_id", self.index_id.strip())
 
 
 @dataclass(frozen=True)

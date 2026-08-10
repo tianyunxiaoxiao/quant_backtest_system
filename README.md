@@ -10,7 +10,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# 跑完整回测 (默认 000905.SH, 2018-01-01 ~ 2026-03-31, 日频)
+# 跑完整回测 (省略 --index 时默认 ALL_A_EQ 全A等权)
 PYTHONPATH=src python -m qbt.cli.main --factor reversal_20d
 
 # 指定窗口和调仓频率
@@ -18,13 +18,14 @@ PYTHONPATH=src python -m qbt.cli.main \
   --factor reversal_20d \
   --start 2019-06-01 \
   --end 2019-09-30 \
-  --freq monthly
+  --freq monthly \
+  --index 000905.SH
 ```
 
 ## 项目结构
 
 ```text
-quant_backtest_system/
+quant_backtest_system_clean/
   src/qbt/
     contracts/      # 请求/配置/数据契约
     data/           # 数据摄取、PIT DataPortal、风格代理
@@ -33,12 +34,11 @@ quant_backtest_system/
     reporting/      # 图表、Markdown/JSON 报告、产物登记
     cli/            # 命令行入口
     factors/        # 演示因子库
-  tests/
-    unit/           # 单元测试
-    integration/    # 集成测试 (真实数据)
-    regression/     # 回归测试 (手算 fixture)
+  data/
+    index_membership_source/  # 沪深300/中证500/中证1000月度 PIT 快照
   warehouse/        # Parquet 数据仓库
-  artifacts/        # 回测产物输出
+  artifacts/        # 回测产物输出 (首次运行前为空)
+  DELIVERY_MANIFEST.md
 ```
 
 ## 数据准备
@@ -56,15 +56,11 @@ cfg = IngestConfig(
 ingest_prices(cfg)
 ```
 
-## 运行测试
+## 精简交付
 
-```bash
-.venv/bin/python -m pytest tests -q
-```
-
-最终验收证据见 `verification/MENTOR_COMPLIANCE_AUDIT_20260807.md`。该文档登记了
-81 项自动测试、两个全窗口真实数据运行、人工现金/NAV 复算、产物哈希和导师
-最终 20 条完成条件。
+本目录是可独立运行的精简交付副本。开发期虚拟环境、Git 历史、测试源码、缓存、
+旧回测产物和验证中间文件均未打包。完整性范围和复核结果见
+`DELIVERY_MANIFEST.md`。
 
 ## 关键口径
 
@@ -75,7 +71,7 @@ ingest_prices(cfg)
 - 涨跌停: 距涨停/跌停 0.5 个百分点即视为不可交易
 - 停牌: 零成交量行 + 上市区间内缺行
 - 成本: 佣金双边万 2.5, 印花税卖方单边 (2008-09-19 后 0.1%, 2023-08-28 后 0.05%), 过户费双边
-- 基准: 由 PIT 指数月度权重合成, 复权价空间
+- 基准: 指定指数时由 PIT 指数月度权重合成; 省略指数时使用每日再平衡的全A等权 (`ALL_A_EQ`), 复权价空间
 - 风格: Size/Value/Momentum/Volatility/Liquidity 代理, Growth/Quality/Leverage 标记缺失
 
 ## 产物目录

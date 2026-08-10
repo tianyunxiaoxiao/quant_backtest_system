@@ -1,7 +1,14 @@
 """数据层: 摄取、PIT 解析与 DataPortal。"""
 
-from qbt.data.benchmark import build_benchmark_returns, load_official_benchmark
+from qbt.data.benchmark import (
+    build_benchmark_returns,
+    build_equal_weight_all_a_returns,
+    load_official_benchmark,
+)
 from qbt.data.ingest_index import (
+    ALL_A_INDEX_ID,
+    ALL_A_INDEX_NAME,
+    DEFAULT_INDEX_ID,
     INDEX_SPECS,
     IndexSpec,
     expand_monthly_to_daily,
@@ -20,6 +27,9 @@ from qbt.data.tradability import build_limit_matrices, build_suspension, price_l
 
 __all__ = [
     "INDEX_SPECS",
+    "ALL_A_INDEX_ID",
+    "ALL_A_INDEX_NAME",
+    "DEFAULT_INDEX_ID",
     "IndexSpec",
     "IngestConfig",
     "MISSING_STYLES",
@@ -28,6 +38,7 @@ __all__ = [
     "PricePanel",
     "STYLE_NAMES",
     "build_benchmark_returns",
+    "build_equal_weight_all_a_returns",
     "build_limit_matrices",
     "build_style_exposures",
     "build_suspension",

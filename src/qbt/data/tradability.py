@@ -33,10 +33,10 @@ def price_limit_ratio(asset_id: str, day: pd.Timestamp, *, listed_first: pd.Time
     board = _board(asset_id)
     if listed_first is not None and pd.notna(listed_first):
         # 新股上市初期不设限: 主板首日, 创业板/科创板前 5 日, 北交所首日
-        n_days = (day - listed_first).days
-        if board in ("star", "chinext") and n_days <= 7:
+        n_trading_days = len(pd.bdate_range(listed_first.normalize(), day.normalize()))
+        if board in ("star", "chinext") and n_trading_days <= 5:
             return float("nan")
-        if board in ("main", "bse") and n_days == 0:
+        if board in ("main", "bse") and n_trading_days == 1:
             return float("nan")
     if board == "bse":
         return 0.30
@@ -65,11 +65,13 @@ def _limit_ratio_matrix(
         else:
             col = pd.Series(0.10, index=dates, dtype="float64")
         first = listed_first.get(asset, pd.NaT)
-        if pd.notna(first):
+        if pd.notna(first) and dates[0] <= pd.Timestamp(first) <= dates[-1]:
+            first_pos = int(dates.searchsorted(pd.Timestamp(first), side="left"))
             if board in ("star", "chinext"):
-                col[dates <= first + pd.Timedelta(days=7)] = float("nan")
-            else:
-                col[dates == first] = float("nan")
+                # 上市后的前 5 个实际交易日不设涨跌幅限制。
+                col.iloc[first_pos:min(first_pos + 5, len(col))] = float("nan")
+            elif first_pos < len(col):
+                col.iloc[first_pos] = float("nan")
         out[asset] = col.astype("float32")
     return out
 
@@ -88,12 +90,12 @@ def build_limit_matrices(
 
     buffer_ratio 是导师 B5 口径的绝对幅度缓冲: 10% 限幅下涨到 9.5% 即视为不可买。
 
-    判定必须和成交价口径一致 (导师 B1 定的是 T+1 开盘价成交), 所以传进来的
+    判定必须和成交价口径一致 (导师 B1 默认 T+1 VWAP), 所以传进来的
     raw_fill_price 就是实际成交参考价。满足其一即拦买单:
       - 成交参考价 >= 买入拦截价: 那一刻的价格本身在拦截区, 这个价拿不到;
       - 全天最低价 >= 买入拦截价: 一字板, 全天没有低于拦截价的成交 (兜底,
         成交价缺失时仍能判定)。
-    卖出侧对称。开盘价成交下第一条即"开盘封板不可买", 与直觉一致。
+    卖出侧对称；开盘价敏感性配置下第一条即"开盘封板不可买"。
     """
     dates, assets = raw_prev_close.index, raw_prev_close.columns
     ratio = _limit_ratio_matrix(assets, dates, listed_first)

@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
@@ -30,23 +32,43 @@ __all__ = ["ExecutionEngine", "ExecutionOutput"]
 _LOT_EXEMPT_SUFFIX = ()  # A 股全部按整手买入
 
 
-class ExecutionOutput:
-    __slots__ = (
-        "orders", "fills", "holdings_shares", "holdings_cost_basis",
-        "holdings_unrealized_pnl", "holdings_value", "actual_weights", "cash_ledger",
-        "costs", "unfilled_summary", "accounting_identity",
-    )
+def _is_star_market(asset_id: str) -> bool:
+    code = asset_id.split(".", 1)[0]
+    return code.startswith(("688", "689"))
 
-    def __init__(self, **kw) -> None:
-        for k, v in kw.items():
-            setattr(self, k, v)
+
+@dataclass(frozen=True)
+class ExecutionOutput:
+    orders: tuple[OrderRecord, ...]
+    fills: tuple[FillRecord, ...]
+    holdings_shares: pd.DataFrame
+    holdings_cost_basis: pd.DataFrame
+    holdings_unrealized_pnl: pd.DataFrame
+    holdings_value: pd.DataFrame
+    actual_weights: pd.DataFrame
+    cash_ledger: pd.DataFrame
+    costs: pd.DataFrame
+    unfilled_summary: pd.DataFrame
+    accounting_identity: pd.DataFrame
 
 
 def _lot_size(asset_id: str, config: LongOnlyFactorBacktestConfig) -> int:
-    """科创板 688 开头最小 200 股, 其余 100 股。"""
-    if asset_id.startswith("688"):
+    """科创板 688/689 开头最小 200 股, 其余 100 股。"""
+    if _is_star_market(asset_id):
         return int(config.execution.star_market_lot_size)
     return int(config.execution.lot_size)
+
+
+def _buy_step(asset_id: str, config: LongOnlyFactorBacktestConfig) -> int:
+    """科创板买入 200 股起、随后 1 股递增；其他 A 股按 100 股递增。"""
+    return 1 if _is_star_market(asset_id) else int(config.execution.lot_size)
+
+
+def _round_buy_quantity(quantity: float, minimum: int, step: int) -> float:
+    """Round a desired buy quantity down to an exchange-valid order quantity."""
+    if not np.isfinite(quantity) or quantity < minimum:
+        return 0.0
+    return float(np.floor((quantity + 1e-9) / step) * step)
 
 
 class ExecutionEngine:
@@ -73,6 +95,9 @@ class ExecutionEngine:
         self._pos = {a: i for i, a in enumerate(self.assets)}
         self._lots = np.array(
             [_lot_size(a, config) for a in self.assets], dtype="int64"
+        )
+        self._buy_steps = np.array(
+            [_buy_step(a, config) for a in self.assets], dtype="int64"
         )
 
         # numpy 视图, 循环里避免 pandas 索引开销
@@ -321,10 +346,26 @@ class ExecutionEngine:
         raw_held = np.divide(
             shares, ratio, out=np.zeros_like(shares), where=np.isfinite(ratio) & (ratio > 0)
         )
+        # 实际账户只能持有整数股。复权因子重建误差可能产生极小的小数尾差，
+        # 在原始股数空间统一还原为整数后再生成订单。
+        raw_held = np.where(raw_held > 0, np.rint(raw_held), 0.0)
         # 信号日无有效收盘价 -> 无法折算目标股数。持仓票默认"不动"而不是清仓:
         # 缺价是数据问题, 按 0 处理会凭空造出一笔清仓单。
         hold_still = (~sizing_ok) & (shares > 0)
         raw_target_shares = np.where(hold_still, raw_held, raw_target_shares)
+        # 目标权重先转换成交易所允许的目标股数，避免未触发现金/ADV 上限时
+        # 原先的浮点目标直接成为小数股成交。
+        raw_target_shares = np.array(
+            [
+                raw_held[j]
+                if hold_still[j]
+                else _round_buy_quantity(
+                    float(raw_target_shares[j]), int(self._lots[j]), int(self._buy_steps[j])
+                )
+                for j in range(len(raw_target_shares))
+            ],
+            dtype="float64",
+        )
 
         total_cost = 0.0
         explicit_cost = 0.0
@@ -346,13 +387,20 @@ class ExecutionEngine:
         for j in sell_idx:
             asset = self.assets[j]
             lot = self._lots[j]
+            step = self._buy_steps[j]
             want_raw = 0.0 if exits[j] else float(raw_target_shares[j])
             delta_raw = float(raw_held[j]) - want_raw
             if delta_raw <= 0:
                 continue
             # 卖出按整手向下取整, 但清仓允许卖零股 (allow_odd_lot_sell)
-            if (exits[j] or want_raw <= 0) and cfg.execution.allow_odd_lot_sell:
-                qty_raw = float(raw_held[j])
+            allow_odd = bool(
+                cfg.execution.allow_odd_lot_sell
+                and (exits[j] or want_raw <= 0 or step == 1)
+            )
+            if allow_odd:
+                qty_raw = float(np.floor(raw_held[j] + 1e-9)) if want_raw <= 0 else float(
+                    np.floor(delta_raw + 1e-9)
+                )
             else:
                 qty_raw = np.floor(delta_raw / lot) * lot
             if qty_raw <= 0:
@@ -387,7 +435,8 @@ class ExecutionEngine:
             fill_price_raw = self.costs.slippage_price(float(vwap_raw[j]), "sell")
             qty_raw, capped = self._apply_adv(
                 qty_raw, adv[j], fill_price_raw, max_part, lot,
-                allow_odd=bool(exits[j] and cfg.execution.allow_odd_lot_sell),
+                minimum=1 if allow_odd else int(lot),
+                step=1 if allow_odd else int(lot),
             )
             if qty_raw <= 0:
                 fills.append(self._reject(oid, asset, day, "sell", ref_price, 0.0, "adv_cap_zero"))
@@ -402,7 +451,8 @@ class ExecutionEngine:
             else:
                 qty_raw, turnover_capped = self._apply_notional_cap(
                     qty_raw, fill_price_raw, remaining_turnover_notional, lot,
-                    allow_odd=False,
+                    minimum=1 if allow_odd else int(lot),
+                    step=1 if allow_odd else int(lot),
                 )
             if qty_raw <= 0:
                 fills.append(
@@ -422,7 +472,12 @@ class ExecutionEngine:
             fc = self.costs.compute(side="sell", filled_quantity=qty_raw,
                                     fill_price=fill_price_raw,
                                     reference_price=float(vwap_raw[j]), fill_date=day)
-            qty_adj = qty_raw * ratio[j]
+            # A full raw-share liquidation must consume the exact remaining adjusted
+            # balance. Provider reconstruction noise can otherwise make
+            # qty_raw * ratio exceed shares[j] slightly, and the later zero clamp
+            # would create a false accounting residual.
+            full_liquidation = qty_raw >= raw_held[j] - 1e-9
+            qty_adj = shares[j] if full_liquidation else min(qty_raw * ratio[j], shares[j])
             avg_cost = cost_basis[j] / shares[j] if shares[j] > 0 else 0.0
             realized += notional - fc.explicit_total - avg_cost * qty_adj
             cost_basis[j] = max(cost_basis[j] - avg_cost * qty_adj, 0.0)
@@ -466,6 +521,7 @@ class ExecutionEngine:
         for j in buy_idx:
             asset = self.assets[j]
             lot = self._lots[j]
+            step = self._buy_steps[j]
             gap_raw = float(buy_gap[j])
             if gap_raw <= 0:
                 continue
@@ -480,6 +536,17 @@ class ExecutionEngine:
                 target_weight=float(tw_row[j]),
                 current_weight=float(mkt_val[j] / equity), sequence=order_seq,
             ))
+            exchange_qty = _round_buy_quantity(gap_raw, int(lot), int(step))
+            if exchange_qty <= 0:
+                why = "below_min_buy_quantity"
+                fills.append(self._reject(oid, asset, day, "buy", ref_price, gap_raw, why))
+                unfilled_rows.append({
+                    "date": day, "asset_id": asset, "side": "buy",
+                    "reason": why, "unfilled_quantity": gap_raw,
+                    "reference_price_raw": vwap_raw[j],
+                })
+                continue
+            exchange_capped = exchange_qty < gap_raw - 1e-9
             blocked, why = self._blocked(ti, j, "buy", allow_buy, tradable_price)
             if blocked:
                 fills.append(self._reject(oid, asset, day, "buy", ref_price, gap_raw, why))
@@ -497,17 +564,26 @@ class ExecutionEngine:
                 })
                 continue
             qty_raw, capped = self._apply_adv(
-                gap_raw, adv[j], fill_price_raw, max_part, lot, allow_odd=False
+                exchange_qty,
+                adv[j],
+                fill_price_raw,
+                max_part,
+                lot,
+                minimum=int(lot),
+                step=int(step),
             )
             # 现金约束: 预留买入费用
             fee_pad = 1.0 + cfg.costs.commission_rate + 0.0001
             budget = max(cash - reserve, 0.0)
-            max_qty = np.floor(budget / (fill_price_raw * fee_pad) / lot) * lot
+            max_qty = _round_buy_quantity(
+                budget / (fill_price_raw * fee_pad), int(lot), int(step)
+            )
             cash_capped = max_qty < qty_raw
             qty_raw = min(qty_raw, max_qty)
             qty_raw, turnover_capped = self._apply_notional_cap(
                 qty_raw, fill_price_raw, remaining_turnover_notional, lot,
-                allow_odd=False,
+                minimum=int(lot),
+                step=int(step),
             )
             if qty_raw <= 0:
                 why = (
@@ -534,7 +610,11 @@ class ExecutionEngine:
             buy_amount += notional
             buy_reference_amount += qty_raw * float(vwap_raw[j])
             bought_adj[j] += qty_adj
-            status = "filled" if not (capped or cash_capped or turnover_capped) else "partial"
+            status = (
+                "filled"
+                if not (exchange_capped or capped or cash_capped or turnover_capped)
+                else "partial"
+            )
             fills.append(FillRecord(
                 order_id=oid, asset_id=asset, order_date=day, fill_date=day, side="buy",
                 fill_price=fill_price_raw, reference_price=float(vwap_raw[j]),
@@ -545,7 +625,13 @@ class ExecutionEngine:
                 impact_cost=fc.impact_cost, status=status,
                 reject_reason=(
                     "turnover_cap" if turnover_capped
-                    else ("adv_cap" if capped else ("insufficient_cash" if cash_capped else ""))
+                    else (
+                        "adv_cap" if capped
+                        else (
+                            "insufficient_cash" if cash_capped
+                            else ("lot_size_rounding" if exchange_capped else "")
+                        )
+                    )
                 ),
                 adv_participation=float(notional / adv[j]) if adv[j] and adv[j] > 0 else np.nan,
             ))
@@ -554,7 +640,13 @@ class ExecutionEngine:
                     "date": day, "asset_id": asset, "side": "buy",
                     "reason": (
                         "turnover_cap" if turnover_capped
-                        else ("adv_cap" if capped else "insufficient_cash")
+                        else (
+                            "adv_cap" if capped
+                            else (
+                                "insufficient_cash" if cash_capped
+                                else "lot_size_rounding"
+                            )
+                        )
                     ),
                     "unfilled_quantity": gap_raw - qty_raw,
                     "reference_price_raw": vwap_raw[j],
@@ -587,7 +679,7 @@ class ExecutionEngine:
         return False, ""
 
     @staticmethod
-    def _apply_adv(qty_raw, adv, price, max_part, lot, *, allow_odd: bool):
+    def _apply_adv(qty_raw, adv, price, max_part, lot, *, minimum: int, step: int):
         """ADV 参与率上限。返回 (可成交股数, 是否被截断)。"""
         if not np.isfinite(adv) or adv <= 0 or not np.isfinite(price) or price <= 0:
             return 0.0, qty_raw > 0
@@ -595,11 +687,11 @@ class ExecutionEngine:
         max_qty = max_notional / price
         if qty_raw <= max_qty:
             return qty_raw, False
-        capped = max_qty if allow_odd else np.floor(max_qty / lot) * lot
+        capped = _round_buy_quantity(max_qty, minimum, step)
         return max(capped, 0.0), True
 
     @staticmethod
-    def _apply_notional_cap(qty_raw, price, remaining, lot, *, allow_odd: bool):
+    def _apply_notional_cap(qty_raw, price, remaining, lot, *, minimum: int, step: int):
         """Apply the remaining executed-notional budget for max_turnover."""
         if not np.isfinite(remaining):
             return qty_raw, False
@@ -608,7 +700,7 @@ class ExecutionEngine:
         max_qty = remaining / price
         if qty_raw <= max_qty + 1e-12:
             return qty_raw, False
-        capped = max_qty if allow_odd else np.floor(max_qty / lot) * lot
+        capped = _round_buy_quantity(max_qty, minimum, step)
         return max(capped, 0.0), True
 
     @staticmethod
@@ -675,20 +767,6 @@ class ExecutionEngine:
         if len(unfilled):
             unfilled["unfilled_amount"] = (
                 unfilled["unfilled_quantity"] * unfilled["reference_price_raw"]
-            )
-            unfilled_summary = (
-                unfilled.groupby(["side", "reason"])
-                .agg(n_orders=("asset_id", "size"),
-                     total_unfilled_shares=("unfilled_quantity", "sum"),
-                     total_unfilled_amount=("unfilled_amount", "sum"))
-                .reset_index().sort_values("n_orders", ascending=False)
-            )
-        else:
-            unfilled_summary = pd.DataFrame(
-                columns=[
-                    "side", "reason", "n_orders", "total_unfilled_shares",
-                    "total_unfilled_amount",
-                ]
             )
 
         return ExecutionOutput(

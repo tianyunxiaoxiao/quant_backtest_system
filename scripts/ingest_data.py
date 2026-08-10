@@ -7,7 +7,7 @@ from qbt.data.ingest_prices import IngestConfig, ingest_prices
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIR = ROOT.parent / "data_backup_before_511_merge"
-INDEX_DIR = ROOT.parent / "指数月度成分股"
+INDEX_DIR = ROOT / "data" / "index_membership_source"
 WAREHOUSE = ROOT / "warehouse"
 
 

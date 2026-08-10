@@ -1,6 +1,7 @@
 """指数基准收益构建 (规范 6.3, 确认清单 A2 - 待补官方序列, 当前用代理)。
 
-数据集没有指数官方点位, 只能用 PIT 成分与月初权重合成基准。
+指定指数没有官方点位时, 用 PIT 成分与月初权重合成基准; 未指定指数时,
+使用每日再平衡的全A等权基准 (`ALL_A_EQ`)。
 口径声明 (必须进披露清单):
 - 用月初 PIT 权重按日漂移 (buy-and-hold within month), 月初快照日重置权重,
   与真实指数的日度再平衡口径存在跟踪误差。
@@ -14,7 +15,46 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-__all__ = ["build_benchmark_returns", "load_official_benchmark"]
+from .ingest_index import ALL_A_INDEX_ID, ALL_A_INDEX_NAME
+
+__all__ = ["build_benchmark_returns", "build_equal_weight_all_a_returns", "load_official_benchmark"]
+
+
+def build_equal_weight_all_a_returns(
+    *, adj_close: pd.DataFrame, member: pd.DataFrame
+) -> tuple[pd.Series, dict]:
+    """Build the default daily-rebalanced equal-weighted All-A benchmark."""
+    dates = adj_close.index
+    member = member.reindex(index=dates, columns=adj_close.columns).fillna(False).astype(bool)
+    # A listed stock remains in an equal-weight basket during a suspension.
+    # Forward-filled valuation yields zero while suspended and correctly captures
+    # the move from the last valid close when trading resumes. cummax prevents
+    # future price availability from admitting a security before its first quote.
+    observed_by_date = adj_close.notna().cummax()
+    valid = member & observed_by_date
+    returns = adj_close.ffill().pct_change(fill_method=None)
+    returns = returns.where(np.isfinite(returns)).fillna(0.0)
+    weights = valid.astype("float64")
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    series = (weights * returns).sum(axis=1).astype("float64").rename("benchmark_return")
+    if len(series):
+        series.iloc[0] = 0.0
+    n_members = valid.sum(axis=1)
+    stats = {
+        "method": "all_a_equal_weight_daily",
+        "source": "synthetic:all_a_equal_weight_daily",
+        "index_id": ALL_A_INDEX_ID,
+        "index_name": ALL_A_INDEX_NAME,
+        "drift_within_period": False,
+        "n_reset_dates": int(len(dates)),
+        "mean_n_members": float(n_members.mean()) if len(n_members) else 0.0,
+        "min_n_members": int(n_members.min()) if len(n_members) else 0,
+        "mean_weight_coverage": 1.0 if len(series) else float("nan"),
+        "min_weight_coverage": 1.0 if len(series) else float("nan"),
+        "annualized_return": float((1.0 + series).prod() ** (252.0 / max(len(series), 1)) - 1.0),
+        "annualized_volatility": float(series.std(ddof=1) * np.sqrt(252.0)),
+    }
+    return series, stats
 
 
 def build_benchmark_returns(
@@ -31,8 +71,8 @@ def build_benchmark_returns(
     False: 每日按最新快照权重重置 (日度再平衡, 作为敏感性对照)。
     """
     dates = adj_close.index
-    ret = adj_close.pct_change(fill_method=None)
-    # 停牌/缺价日收益视为 0, 避免把缺失当亏损
+    # 停牌日按最后有效收盘估值；复牌收益从最后有效收盘起算。
+    ret = adj_close.ffill().pct_change(fill_method=None)
     ret_filled = ret.where(np.isfinite(ret)).fillna(0.0)
 
     w0 = index_weights.where(index_member).astype("float64")
@@ -79,6 +119,7 @@ def build_benchmark_returns(
     series.iloc[0] = 0.0
     stats = {
         "method": "pit_monthly_weight_synthetic",
+        "source": "synthetic:pit_monthly_weights",
         "drift_within_period": bool(drift_within_period),
         "n_reset_dates": int(len(resets)),
         "mean_weight_coverage": float(np.nanmean(coverage[1:])) if n > 1 else float("nan"),

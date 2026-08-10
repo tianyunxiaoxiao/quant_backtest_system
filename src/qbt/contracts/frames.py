@@ -155,7 +155,7 @@ class TradabilityFrame:
         for name in self._MATRICES:
             df = getattr(self, name)
             df = _check_matrix(f"TradabilityFrame.{name}", df, numeric=False)
-            if df.dtypes.map(lambda dt: dt != bool).any():
+            if not df.dtypes.map(pd.api.types.is_bool_dtype).all():
                 df = df.astype(bool)
             object.__setattr__(self, name, df)
             if ref_idx is None:

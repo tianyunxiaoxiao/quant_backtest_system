@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 import qbt
-from qbt.data.ingest_index import INDEX_SPECS, ingest_index_membership
+from qbt.data.ingest_index import ALL_A_INDEX_ID, INDEX_SPECS, ingest_index_membership
 from qbt.data.panel import load_price_panel
 from qbt.data.portal import PortalConfig
 from qbt.factors.demo import DEMO_FACTOR_SPECS, build_demo_factor
@@ -21,14 +21,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="指数内多头因子回测")
     p.add_argument("--factor", required=True, choices=sorted(DEMO_FACTOR_SPECS),
                    help="演示因子 ID")
-    p.add_argument("--index", default="000905.SH", choices=sorted(INDEX_SPECS),
-                   help="目标指数 ID")
+    p.add_argument(
+        "--index",
+        default=None,
+        choices=[ALL_A_INDEX_ID, *sorted(INDEX_SPECS)],
+        help=f"目标指数 ID (省略时使用 {ALL_A_INDEX_ID}: 全A等权)",
+    )
     p.add_argument("--start", default="2018-01-01", help="回测开始日期 (YYYY-MM-DD)")
     p.add_argument("--end", default="2026-03-31", help="回测结束日期 (YYYY-MM-DD)")
     p.add_argument("--freq", default="daily", choices=["daily", "weekly", "monthly"],
                    help="调仓频率")
     p.add_argument("--warehouse", default=None, help="Parquet 仓库目录 (默认: 项目 warehouse)")
-    p.add_argument("--index-dir", default=None, help="指数成分目录 (默认: 父目录 指数月度成分股)")
+    p.add_argument(
+        "--index-dir",
+        default=None,
+        help="指数成分目录 (默认: 项目 data/index_membership_source)",
+    )
     p.add_argument("--output", default=None, help="产物输出目录 (默认: artifacts/lof_{run_id})")
     p.add_argument("--capital", type=float, default=100_000_000.0, help="初始资金")
     p.add_argument("--no-report", action="store_true", help="只跑回测, 不生成报告")
@@ -39,13 +47,28 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     project_root = Path(__file__).resolve().parents[3]
     warehouse = Path(args.warehouse) if args.warehouse else project_root / "warehouse"
-    index_dir = Path(args.index_dir) if args.index_dir else project_root.parent / "指数月度成分股"
+    index_dir = (
+        Path(args.index_dir)
+        if args.index_dir
+        else project_root / "data" / "index_membership_source"
+    )
 
     portal = qbt.PortfolioDataPortal(
         PortalConfig(warehouse_dir=warehouse, index_source_dir=index_dir, style_warmup_days=300)
     )
-    monthly, _ = ingest_index_membership(index_dir, INDEX_SPECS[args.index])
-    assets = sorted(monthly["asset_id"].unique())
+    if args.index in (None, ALL_A_INDEX_ID):
+        assets = sorted(
+            {
+                str(asset)
+                for path in (warehouse / "daily_prices").glob("*.parquet")
+                for asset in pd.read_parquet(path, columns=["asset_id"])["asset_id"].dropna().unique()
+            }
+        )
+        index_id = ALL_A_INDEX_ID
+    else:
+        monthly, _ = ingest_index_membership(index_dir, INDEX_SPECS[args.index])
+        assets = sorted(monthly["asset_id"].unique())
+        index_id = args.index
     panel = load_price_panel(
         warehouse,
         assets=assets,
@@ -67,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         rebalance_frequency=args.freq,
         initial_capital=args.capital,
     )
-    request = qbt.LongOnlyFactorBacktestRequest(factor=factor, index_id=args.index, config=config)
+    request = qbt.LongOnlyFactorBacktestRequest(factor=factor, index_id=index_id, config=config)
     backtester = qbt.LongOnlyFactorBacktester(portal)
     result = backtester.run(request)
 

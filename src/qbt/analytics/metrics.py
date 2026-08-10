@@ -115,8 +115,6 @@ def compute_performance_stats(
 
     cost = frame.get("trade_cost", pd.Series(0.0, index=frame.index)).astype("float64")
     total_cost = float(cost.sum())
-    nav_abs = frame.get("net_assets")
-    base_nav = float(nav_abs.iloc[0]) if nav_abs is not None else float("nan")
     gross_ann = _ann_return(1.0, float(gnav.iloc[-1]), n, ppy)
     # 成本侵蚀 = 成本拖累的年化收益 / 毛组合相对基准的年化超额
     gross_excess_ann = (

@@ -16,15 +16,12 @@ import pandas as pd
 from qbt.contracts import (
     ConstraintConfig,
     DatasetRef,
-    ExecutionConfig,
     FactorFrame,
     LongOnlyFactorBacktestConfig,
     LongOnlyFactorBacktestRequest,
     LongOnlyFactorBacktestResult,
     PortfolioBacktestDiagnostics,
     PortfolioConstraintReport,
-    PortfolioInitialState,
-    PortfolioReportConfig,
     ResolvedLongOnlyBacktestData,
     RunManifest,
 )
@@ -131,7 +128,6 @@ class LongOnlyFactorBacktester:
         )
 
         # P5: 绩效指标
-        from qbt.analytics.metrics import compute_performance_stats, monthly_table, yearly_table
 
         samples = {
             "full_sample": return_frame,
@@ -158,6 +154,8 @@ class LongOnlyFactorBacktester:
         # P4: 风格暴露
         from qbt.analytics.style import compute_style_exposure
 
+        if resolved.index_weights is None:
+            raise ValueError("resolved index_weights cannot be None")
         style_exposure = compute_style_exposure(
             actual_weights=execution.actual_weights,
             index_weights=resolved.index_weights.fillna(0.0),
@@ -267,22 +265,34 @@ class LongOnlyFactorBacktester:
         cfg: LongOnlyFactorBacktestConfig,
     ) -> RunManifest:
         code_ver = git_code_version(self.bcfg.repo_root)
+        index_id = request.index_id or "ALL_A_EQ"
         strategy_id = (
-            f"{request.factor.factor_id}_{request.index_id}_"
+            f"{request.factor.factor_id}_{index_id}_"
             f"sf{cfg.selection_fraction}_wm{cfg.weighting.method}_"
             f"cv{cfg.config_version}"
+        )
+        benchmark_disclosure = (
+            "省略指数时使用 ALL_A_EQ 全A等权基准: 按每日可用上市股票等权再平衡, "
+            "停牌日按最后有效收盘估值; 历史退市股缺失仍造成幸存者偏差。"
+            if resolved.benchmark_basis == "all_a_equal_weight_daily"
+            else "基准收益由 PIT 指数月度权重合成 (buy-and-hold within month), "
+            "与官方指数存在跟踪误差; 拿到官方指数点位后可替换。"
         )
         disclosures = [
             "价格与收益在复权价格空间计算, 数量与估值使用复权股数, 等价于分红再投资的全收益近似。",
             "历史退市股与历史 ST 状态未包含在当前数据源中, 存在幸存者偏差与 ST 状态推断缺失。",
-            "基准收益由 PIT 指数月度权重合成 (buy-and-hold within month), 与官方指数存在跟踪误差; "
-            "拿到官方指数点位后可替换。",
+            benchmark_disclosure,
             "风格暴露为基于价量/估值字段自建的简化代理 (非 Barra), "
             "Growth/Quality/Leverage 因缺财务数据标记为缺失。",
             f"T+1 按 {cfg.execution.fill_price_field} 成交 (默认全天 VWAP), "
             "整手买入、卖出允许零股, 先卖后买, 未成交订单当日取消。",
         ]
-        disclosures.extend(resolved.notes.get("warnings", []))
+        resolved_warnings = resolved.notes.get("warnings", ())
+        if not isinstance(resolved_warnings, (list, tuple)) or not all(
+            isinstance(item, str) for item in resolved_warnings
+        ):
+            raise TypeError("resolved.notes['warnings'] must be a sequence of strings")
+        disclosures.extend(resolved_warnings)
         run_id = new_run_id("lof")
         actual_factor_hash = hash_frame(request.factor.values)
         if request.factor.content_hash and request.factor.content_hash != actual_factor_hash:
@@ -308,7 +318,7 @@ class LongOnlyFactorBacktester:
             run_id=run_id,
             strategy_id=strategy_id,
             factor_id=request.factor.factor_id,
-            index_id=request.index_id,
+            index_id=index_id,
             code_version=code_ver,
             config_version=cfg.config_version,
             created_at=utc_now_iso(),
@@ -686,6 +696,12 @@ class LongOnlyFactorBacktester:
     ) -> PortfolioBacktestDiagnostics:
         identity = execution.accounting_identity
         residual_bps = identity.get("residual_bps_of_nav", pd.Series(dtype="float64"))
+        raw_disclosures = resolved.notes.get("warnings", ())
+        disclosures = (
+            tuple(item for item in raw_disclosures if isinstance(item, str))
+            if isinstance(raw_disclosures, (list, tuple))
+            else ()
+        )
         return PortfolioBacktestDiagnostics(
             timeline={
                 "signal_time": cfg.clock.signal_time,
@@ -713,5 +729,5 @@ class LongOnlyFactorBacktester:
                     else ""
                 ]
             ),
-            disclosures=resolved.notes.get("warnings", []),
+            disclosures=disclosures,
         )

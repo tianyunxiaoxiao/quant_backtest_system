@@ -36,6 +36,7 @@ from qbt.contracts import (
     fills_to_frame,
     orders_to_frame,
 )
+from qbt.data.ingest_index import ALL_A_INDEX_ID, ALL_A_INDEX_NAME, DEFAULT_INDEX_ID
 from qbt.data.portal import PortalConfig, PortfolioDataPortal
 from qbt.engine.backtester import BacktesterConfig, LongOnlyFactorBacktester
 
@@ -43,6 +44,9 @@ __version__ = "1.0.0"
 
 __all__ = [
     "AlphaBetaReport",
+    "ALL_A_INDEX_ID",
+    "ALL_A_INDEX_NAME",
+    "DEFAULT_INDEX_ID",
     "BacktesterConfig",
     "ClockConfig",
     "ConstraintConfig",

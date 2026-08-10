@@ -213,7 +213,11 @@ class LongOnlyFactorReporter:
 
     @staticmethod
     def _build_summary(result: LongOnlyFactorBacktestResult) -> dict[str, Any]:
-        from qbt.reporting.artifacts import _alphabeta_to_dict, _performance_to_dict, _selection_to_dict
+        from qbt.reporting.artifacts import (
+            _alphabeta_to_dict,
+            _performance_to_dict,
+            _selection_to_dict,
+        )
 
         m = result.run_manifest
         return {

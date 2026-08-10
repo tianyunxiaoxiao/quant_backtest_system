@@ -23,9 +23,19 @@ from ..contracts import (
     ResolvedLongOnlyBacktestData,
     TradabilityFrame,
 )
-from .benchmark import build_benchmark_returns, load_official_benchmark
+from .benchmark import (
+    build_benchmark_returns,
+    build_equal_weight_all_a_returns,
+    load_official_benchmark,
+)
 from .hashing import hash_file, hash_frame, hash_json, hash_series
-from .ingest_index import INDEX_SPECS, expand_monthly_to_daily, ingest_index_membership
+from .ingest_index import (
+    ALL_A_INDEX_ID,
+    ALL_A_INDEX_NAME,
+    INDEX_SPECS,
+    expand_monthly_to_daily,
+    ingest_index_membership,
+)
 from .panel import build_trading_calendar, load_price_panel
 from .style import MISSING_STYLES, build_style_exposures
 from .tradability import build_limit_matrices, build_suspension
@@ -46,6 +56,24 @@ class PortalConfig:
     official_benchmark_files: dict[str, str] = field(default_factory=dict)
     style_warmup_days: int = 300
     cache_dir: Path | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "warehouse_dir", Path(self.warehouse_dir))
+        object.__setattr__(self, "index_source_dir", Path(self.index_source_dir))
+        if self.cache_dir is not None:
+            object.__setattr__(self, "cache_dir", Path(self.cache_dir))
+        if self.calendar_min_active < 1:
+            raise ValueError("calendar_min_active 必须 >= 1")
+        if self.adv_window < 1:
+            raise ValueError("adv_window 必须 >= 1")
+        if not np.isfinite(self.limit_buffer_ratio) or not 0 <= self.limit_buffer_ratio < 1:
+            raise ValueError("limit_buffer_ratio 必须是 [0, 1) 内有限数")
+        if self.fill_price_field not in {"adj_open", "adj_vwap", "adj_close"}:
+            raise ValueError("fill_price_field 必须是 adj_open/adj_vwap/adj_close")
+        if self.style_warmup_days < 0:
+            raise ValueError("style_warmup_days 不能为负")
+        if not isinstance(self.benchmark_drift_within_period, bool):
+            raise TypeError("benchmark_drift_within_period 必须是 bool")
 
 
 class PortfolioDataPortal:
@@ -124,40 +152,52 @@ class PortfolioDataPortal:
         return hash_json(partitions)
 
     def resolve(
-        self, factor: FactorFrame, index_id: str, config: LongOnlyFactorBacktestConfig
+        self, factor: FactorFrame, index_id: str | None, config: LongOnlyFactorBacktestConfig
     ) -> ResolvedLongOnlyBacktestData:
-        if index_id not in INDEX_SPECS:
-            raise KeyError(f"未知 index_id: {index_id}; 已支持 {sorted(INDEX_SPECS)}")
-        spec = INDEX_SPECS[index_id]
+        index_id = ALL_A_INDEX_ID if index_id is None else str(index_id).strip()
+        if not index_id:
+            index_id = ALL_A_INDEX_ID
+        is_all_a = index_id == ALL_A_INDEX_ID
+        if not is_all_a and index_id not in INDEX_SPECS:
+            raise KeyError(
+                f"未知 index_id: {index_id}; 已支持 {[ALL_A_INDEX_ID, *sorted(INDEX_SPECS)]}"
+            )
         dataset_refs: list[DatasetRef] = []
         notes: dict[str, object] = {}
         warnings_list: list[str] = []
 
-        monthly, index_stats = ingest_index_membership(
-            Path(self.config.index_source_dir), spec
-        )
-        dataset_refs.append(
-            DatasetRef(
-                name=f"index_membership:{index_id}",
-                uri=str(Path(self.config.index_source_dir).resolve()),
-                content_hash=hash_frame(monthly.drop(columns=["source_file"])),
-                rows=len(monthly),
-                columns=monthly.shape[1],
-                date_min=index_stats["snapshot_first"],
-                date_max=index_stats["snapshot_last"],
-                notes=f"monthly PIT snapshots; missing_months={len(index_stats['missing_months'])}",
+        monthly: pd.DataFrame | None = None
+        if not is_all_a:
+            spec = INDEX_SPECS[index_id]
+            monthly, index_stats = ingest_index_membership(
+                Path(self.config.index_source_dir), spec
             )
-        )
-        notes["index_membership_stats"] = index_stats
+            dataset_refs.append(
+                DatasetRef(
+                    name=f"index_membership:{index_id}",
+                    uri=str(Path(self.config.index_source_dir).resolve()),
+                    content_hash=hash_frame(monthly.drop(columns=["source_file"])),
+                    rows=len(monthly),
+                    columns=monthly.shape[1],
+                    date_min=index_stats["snapshot_first"],
+                    date_max=index_stats["snapshot_last"],
+                    notes=f"monthly PIT snapshots; missing_months={len(index_stats['missing_months'])}",
+                )
+            )
+            notes["index_membership_stats"] = index_stats
 
         calendar = self.trading_calendar()
         start, end, warmup_start = self._resolve_window(factor, config, calendar, monthly)
-        if config.start_date is not None and start > pd.Timestamp(config.start_date):
+        if not is_all_a and config.start_date is not None and start > pd.Timestamp(config.start_date):
             warnings_list.append(
                 f"请求开始日 {config.start_date} 早于首个可用 PIT 成分生效日; "
                 f"有效回测从 {start.date()} 开始, 未做历史回填"
             )
-        universe_assets = sorted(monthly["asset_id"].unique())
+        universe_assets = (
+            self._discover_all_a_assets(factor)
+            if is_all_a
+            else sorted(monthly["asset_id"].unique()) if monthly is not None else []
+        )
 
         panel = load_price_panel(
             Path(self.config.warehouse_dir),
@@ -202,6 +242,8 @@ class PortfolioDataPortal:
             gap = sorted(set(missing_assets) | set(no_data))
             gap_weight = (
                 monthly[monthly["asset_id"].isin(gap)].groupby("snapshot_date")["weight"].sum()
+                if monthly is not None
+                else pd.Series(dtype="float64")
             )
             notes["price_missing_members"] = {
                 "count": len(gap),
@@ -214,13 +256,58 @@ class PortfolioDataPortal:
                 f"{float(gap_weight.max()) * 100 if len(gap_weight) else 0:.2f}%; 存在幸存者偏差"
             )
 
-        member_full, weight_full = expand_monthly_to_daily(
-            monthly, panel.trading_days, assets=panel.assets
-        )
+        if is_all_a:
+            listed = pd.DataFrame(
+                {
+                    asset: (
+                        (panel.trading_days >= panel.listed_first[asset])
+                        & (panel.trading_days <= panel.listed_last[asset])
+                    )
+                    for asset in panel.assets
+                },
+                index=panel.trading_days,
+            ).fillna(False)
+            member_full = listed.astype(bool)
+            weight_full = member_full.astype("float64").div(
+                member_full.sum(axis=1).replace(0.0, np.nan), axis=0
+            ).fillna(0.0)
+            dataset_refs.append(
+                DatasetRef(
+                    name=f"index_membership:{index_id}",
+                    uri=str((Path(self.config.warehouse_dir) / "daily_prices").resolve()),
+                    content_hash=hash_json(
+                        {
+                            "member": hash_frame(member_full.astype("uint8")),
+                            "weight": hash_frame(weight_full),
+                        }
+                    ),
+                    rows=len(member_full),
+                    columns=len(member_full.columns),
+                    date_min=str(member_full.index[0].date()),
+                    date_max=str(member_full.index[-1].date()),
+                    notes="derived from listed A-share panel; daily equal weights",
+                )
+            )
+            notes["index_membership_stats"] = {
+                "index_id": ALL_A_INDEX_ID,
+                "index_name": ALL_A_INDEX_NAME,
+                "method": "listed_assets_from_daily_price_panel",
+                "members_min": int(member_full.sum(axis=1).min()),
+                "members_max": int(member_full.sum(axis=1).max()),
+            }
+        else:
+            member_full, weight_full = expand_monthly_to_daily(
+                monthly, panel.trading_days, assets=panel.assets
+            )
 
         fill_price_field = config.execution.fill_price_field
         price_bundle = self._build_price_frame(panel, fill_price_field)
-        tradability = self._build_tradability(panel, price_bundle[1], fill_price_field)
+        tradability = self._build_tradability(
+            panel,
+            price_bundle[1],
+            fill_price_field,
+            config.execution.limit_touch_buffer,
+        )
         liquidity = self._build_liquidity(panel)
         styles, style_coverage = self._build_styles(panel, member_full)
 
@@ -303,16 +390,35 @@ class PortfolioDataPortal:
 
     # ---------- 内部构建 ----------
 
+    def _discover_all_a_assets(self, factor: FactorFrame) -> list[str]:
+        """Discover the full available A-share panel for the default benchmark."""
+        assets = {str(asset) for asset in factor.values.columns}
+        price_dir = Path(self.config.warehouse_dir) / "daily_prices"
+        price_files = sorted(price_dir.glob("*.parquet"))
+        if not price_files:
+            raise ValueError(f"全A等权基准没有行情分区: {price_dir}")
+        for path in price_files:
+            try:
+                values = pd.read_parquet(path, columns=["asset_id"])["asset_id"]
+            except (OSError, KeyError, ValueError) as exc:
+                raise ValueError(f"全A行情分区无法读取 asset_id: {path}") from exc
+            assets.update(str(asset) for asset in values.dropna().unique())
+        if not assets:
+            raise ValueError(f"全A等权基准没有可用股票: {price_dir}")
+        return sorted(assets)
+
     def _resolve_window(
         self,
         factor: FactorFrame,
         config: LongOnlyFactorBacktestConfig,
         calendar: pd.DatetimeIndex,
-        monthly: pd.DataFrame,
+        monthly: pd.DataFrame | None,
     ) -> tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]:
         """确定回测窗口。成分数据生效前的日期一律截掉, 严禁回填历史成分。"""
         f_start, f_end = factor.dates[0], factor.dates[-1]
-        first_snapshot = pd.Timestamp(monthly["snapshot_date"].min())
+        first_snapshot = (
+            pd.Timestamp(monthly["snapshot_date"].min()) if monthly is not None else f_start
+        )
         start = max(f_start, first_snapshot)
         if config.start_date is not None:
             start = max(start, pd.Timestamp(config.start_date))
@@ -326,7 +432,9 @@ class PortfolioDataPortal:
         warmup_pos = max(int(pos) - self.config.style_warmup_days, 0)
         return start, end, calendar[warmup_pos]
 
-    def _build_price_frame(self, panel, fill_price_field: str | None = None) -> MarketPriceFrame:
+    def _build_price_frame(
+        self, panel, fill_price_field: str | None = None
+    ) -> tuple[MarketPriceFrame, pd.DataFrame]:
         w = panel.wide
         prev_close = w["adj_prev_close"].copy()
         # 首行前收盘缺失时用当日收盘兜底, 保证限价推导不整行失效
@@ -366,6 +474,7 @@ class PortfolioDataPortal:
         panel,
         raw_prev_close: pd.DataFrame,
         fill_price_field: str | None = None,
+        limit_buffer_ratio: float | None = None,
     ) -> TradabilityFrame:
         w = panel.wide
         limits = build_limit_matrices(
@@ -373,10 +482,14 @@ class PortfolioDataPortal:
             raw_high=panel.raw_high,
             raw_low=panel.raw_low,
             raw_open=w["raw_open"],
-            # 判定口径必须跟成交价一致 (导师 B1: T+1 开盘价成交)
+            # 判定口径必须跟成交价一致 (导师 B1 默认 T+1 VWAP)
             raw_fill_price=w[self._raw_fill_field(fill_price_field)],
             listed_first=panel.listed_first,
-            buffer_ratio=self.config.limit_buffer_ratio,
+            buffer_ratio=(
+                self.config.limit_buffer_ratio
+                if limit_buffer_ratio is None
+                else float(limit_buffer_ratio)
+            ),
         )
         susp = build_suspension(
             volume=w["volume"],
@@ -426,6 +539,10 @@ class PortfolioDataPortal:
         )
 
     def _build_benchmark(self, index_id, panel, weights, member, monthly):
+        if index_id == ALL_A_INDEX_ID:
+            return build_equal_weight_all_a_returns(
+                adj_close=panel.wide["adj_close"], member=member
+            )
         official = self.config.official_benchmark_files.get(index_id)
         if official and Path(official).exists():
             return load_official_benchmark(official, panel.trading_days)

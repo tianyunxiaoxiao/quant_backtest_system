@@ -15,7 +15,7 @@ import pandas as pd
 
 from qbt.contracts import LongOnlyFactorBacktestResult, RunArtifact, RunManifest
 from qbt.contracts.records import fills_to_frame, orders_to_frame
-from qbt.data.hashing import hash_bytes, hash_file, hash_frame, hash_json
+from qbt.data.hashing import hash_file
 
 __all__ = [
     "ArtifactWriter", "write_backtest_artifacts", "safe_artifact_path",
@@ -383,10 +383,15 @@ def load_backtest_artifacts(output_dir: Path) -> LongOnlyFactorBacktestResult:
     manifest = RunManifest(**manifest_kwargs)
 
     performance_payload = read_json("performance_report")
-    stats = lambda name: (
-        None if performance_payload[name] is None
-        else PerformanceStats(**performance_payload[name])
-    )
+
+    def stats(name: str) -> PerformanceStats | None:
+        payload = performance_payload[name]
+        return None if payload is None else PerformanceStats(**payload)
+
+    full_sample = stats("full_sample")
+    if full_sample is None:
+        raise ValueError("performance_report.full_sample cannot be null")
+
     yearly = _frame_from_split(performance_payload["yearly"])
     monthly = _frame_from_split(performance_payload["monthly"])
     rolling = _frame_from_split(performance_payload["rolling"], datetime_index=True)
@@ -395,7 +400,7 @@ def load_backtest_artifacts(output_dir: Path) -> LongOnlyFactorBacktestResult:
         if column in drawdown:
             drawdown[column] = pd.to_datetime(drawdown[column])
     performance = PortfolioPerformanceReport(
-        full_sample=stats("full_sample"),
+        full_sample=full_sample,
         in_sample=stats("in_sample"),
         out_of_sample=stats("out_of_sample"),
         yearly=yearly,

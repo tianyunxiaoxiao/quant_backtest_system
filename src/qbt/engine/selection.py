@@ -116,12 +116,39 @@ def select_daily(
         )
 
     diagnostics = pd.DataFrame(rows).set_index("date")
-    exclusion_reasons = diagnostics[
-        [
-            "n_index_members", "n_eligible", "excluded_not_tradable",
-            "excluded_invalid_factor", "excluded_both",
-        ]
-    ].copy()
+    # 规范 7.1 要求未入选、因子缺失和不可交易原因逐资产可追溯。
+    # 用分类列保存长表，避免真实数据下重复字符串造成不必要的内存膨胀。
+    excluded = in_index & (~selected)
+    row_pos, col_pos = np.nonzero(excluded)
+    reason_names = (
+        "not_tradable_and_invalid_factor",
+        "not_tradable",
+        "invalid_factor",
+        "below_selection_cutoff",
+    )
+    if len(row_pos):
+        not_tradable = requires_tradable & (~tradable[row_pos, col_pos])
+        invalid = requires_valid_factor & (~valid_factor[row_pos, col_pos])
+        reason_code = np.select(
+            [not_tradable & invalid, not_tradable, invalid],
+            [0, 1, 2],
+            default=3,
+        ).astype("int8")
+        exclusion_reasons = pd.DataFrame(
+            {
+                "date": dates.take(row_pos),
+                "asset_id": pd.Categorical.from_codes(col_pos, categories=assets),
+                "reason": pd.Categorical.from_codes(reason_code, categories=reason_names),
+            }
+        )
+    else:
+        exclusion_reasons = pd.DataFrame(
+            {
+                "date": pd.Series(dtype="datetime64[ns]"),
+                "asset_id": pd.Series(pd.Categorical([], categories=assets)),
+                "reason": pd.Series(pd.Categorical([], categories=reason_names)),
+            }
+        )
     return SelectionResult(
         selected=pd.DataFrame(selected, index=dates, columns=assets),
         rank=pd.DataFrame(rank_arr, index=dates, columns=assets),

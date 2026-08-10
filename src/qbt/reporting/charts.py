@@ -6,15 +6,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
-from matplotlib import font_manager
-import numpy as np
 import pandas as pd
+from matplotlib import font_manager
+
+from qbt.contracts import LongOnlyFactorBacktestResult
 
 
 def _configure_cjk_font() -> None:
@@ -33,8 +34,6 @@ def _configure_cjk_font() -> None:
             return
         except (FileNotFoundError, RuntimeError, OSError):
             continue
-
-from qbt.contracts import LongOnlyFactorBacktestResult
 
 _configure_cjk_font()
 

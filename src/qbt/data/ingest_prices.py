@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import warnings
 import shutil
 import tempfile
 import uuid
@@ -24,8 +23,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-warnings.filterwarnings("ignore", category=FutureWarning)
 
 __all__ = ["IngestConfig", "load_single_stock", "ingest_prices"]
 

@@ -1,0 +1,11 @@
+.venv/
+frontend/node_modules/
+frontend/dist/
+data/runs/
+qbt_web.db
+__pycache__/
+*.pyc
+.DS_Store
+*.png
+*.log
+.env

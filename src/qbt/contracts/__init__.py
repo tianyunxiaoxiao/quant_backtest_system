@@ -28,10 +28,12 @@ from .records import (
     DatasetRef,
     FillRecord,
     OrderRecord,
+    PositionPeriodRecord,
     RunArtifact,
     RunManifest,
     fills_to_frame,
     orders_to_frame,
+    position_period_to_frame,
 )
 from .reports import (
     AlphaBetaReport,
@@ -51,8 +53,8 @@ __all__ = [
     "PortfolioReportConfig", "RegressionConfig", "SelectionConfig", "WeightingConfig", "asdict_deep",
     "FactorFrame", "MarketPriceFrame", "PortfolioInitialState", "PortfolioLiquidityData",
     "ResolvedLongOnlyBacktestData", "TradabilityFrame",
-    "DatasetRef", "FillRecord", "OrderRecord", "RunArtifact", "RunManifest",
-    "fills_to_frame", "orders_to_frame",
+    "DatasetRef", "FillRecord", "OrderRecord", "PositionPeriodRecord", "RunArtifact", "RunManifest",
+    "fills_to_frame", "orders_to_frame", "position_period_to_frame",
     "AlphaBetaReport", "IndexSelectionReport", "LongOnlyFactorBacktestResult", "PerformanceStats",
     "PortfolioBacktestDiagnostics", "PortfolioConstraintReport", "PortfolioPerformanceReport",
     "StyleExposureReport",

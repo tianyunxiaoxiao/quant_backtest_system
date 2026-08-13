@@ -24,6 +24,7 @@ from qbt.contracts import (
     PortfolioConstraintReport,
     ResolvedLongOnlyBacktestData,
     RunManifest,
+    position_period_to_frame,
 )
 from qbt.data.hashing import (
     git_code_version,
@@ -201,6 +202,7 @@ class LongOnlyFactorBacktester:
         )
 
         holdings = self._build_holdings_frame(execution, resolved.prices.adj_factor)
+        position_period_analysis = position_period_to_frame(execution.position_period_records)
 
         result = LongOnlyFactorBacktestResult(
             run_manifest=manifest,
@@ -229,6 +231,7 @@ class LongOnlyFactorBacktester:
             portfolio_drawdown=return_frame["portfolio_drawdown"],
             benchmark_drawdown=return_frame["benchmark_drawdown"],
             excess_drawdown=return_frame["excess_drawdown"],
+            position_period_analysis=position_period_analysis,
         )
         result_payload = {
             field.name: getattr(result, field.name)

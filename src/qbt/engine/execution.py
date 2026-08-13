@@ -23,6 +23,7 @@ from ..contracts import (
     MarketPriceFrame,
     OrderRecord,
     PortfolioLiquidityData,
+    PositionPeriodRecord,
     TradabilityFrame,
 )
 from .costs import CostModel
@@ -50,6 +51,7 @@ class ExecutionOutput:
     costs: pd.DataFrame
     unfilled_summary: pd.DataFrame
     accounting_identity: pd.DataFrame
+    position_period_records: tuple[PositionPeriodRecord, ...] = ()
 
 
 def _lot_size(asset_id: str, config: LongOnlyFactorBacktestConfig) -> int:
@@ -167,6 +169,7 @@ class ExecutionEngine:
         fills: list[FillRecord] = []
         ledger_rows: list[dict] = []
         unfilled_rows: list[dict] = []
+        position_period_rows: list[PositionPeriodRecord] = []
 
         # 收盘价前值填充, 停牌日按最后有效价估值 (规范 6.6 suspension_price_policy)
         last_valid_close = np.full(n_a, np.nan, dtype="float64")
@@ -212,6 +215,7 @@ class ExecutionEngine:
                 day_sell_ref_amt = res["sell_reference_amount"]
                 realized = res["realized"]
                 order_seq = res["order_seq"]
+                position_period_rows.extend(res["position_period_rows"])
 
             mkt_val = shares * np.nan_to_num(last_valid_close)
             holdings_shares[ti] = shares
@@ -285,7 +289,7 @@ class ExecutionEngine:
         return self._finalize(
             holdings_shares, holdings_cost_basis, holdings_unrealized_pnl,
             holdings_value, ledger_rows, orders, fills, unfilled_rows,
-            initial_capital, identity_rows,
+            initial_capital, identity_rows, position_period_rows,
         )
 
     # ---------- 调仓日 ----------
@@ -317,6 +321,7 @@ class ExecutionEngine:
                 "sell_reference_amount": 0.0,
                 "realized": 0.0,
                 "order_seq": order_seq,
+                "position_period_rows": [],
             }
 
         # 目标权重本身已经包含 cash_buffer；这里直接乘总权益，避免重复留现。
@@ -380,6 +385,38 @@ class ExecutionEngine:
             else np.inf
         )
 
+        # 持仓迁移记录: 每个调仓日单只标的 pre/target/order/fill/post
+        shares_start = shares.copy()
+        position_period_rows: list[PositionPeriodRecord] = []
+        pp_order_qty_raw: dict[int, float] = {}
+        pp_fill_qty_raw: dict[int, float] = {}
+        pp_fill_price: dict[int, float] = {}
+        pp_reference_price: dict[int, float] = {}
+        pp_status: dict[int, str] = {}
+        pp_reject_reason: dict[int, str] = {}
+        pp_reason: dict[int, str] = {}
+
+        def _record_order(j: int, side: str, qty_raw: float, reason: str) -> None:
+            sign = -1.0 if side == "sell" else 1.0
+            pp_order_qty_raw[j] = sign * qty_raw
+            pp_reason[j] = reason
+
+        def _record_fill(
+            j: int,
+            side: str,
+            qty_raw: float,
+            fill_price: float,
+            ref_price: float,
+            status: str,
+            reject_reason: str,
+        ) -> None:
+            sign = -1.0 if side == "sell" else 1.0
+            pp_fill_qty_raw[j] = pp_fill_qty_raw.get(j, 0.0) + sign * qty_raw
+            pp_fill_price[j] = fill_price
+            pp_reference_price[j] = ref_price
+            pp_status[j] = status
+            pp_reject_reason[j] = reject_reason
+
         # ---- 第一轮: 卖出 (先卖后买, 释放现金当日可用) ----
         sell_idx = np.flatnonzero(
             held & ((raw_target_shares < raw_held - 1e-9) | exits)
@@ -417,15 +454,18 @@ class ExecutionEngine:
                 target_weight=float(tw_row[j]),
                 current_weight=float(mkt_val[j] / equity), sequence=order_seq,
             ))
+            _record_order(j, "sell", qty_raw, reason)
             blocked, why = self._blocked(ti, j, "sell", allow_sell, tradable_price)
             if blocked:
                 fills.append(self._reject(oid, asset, day, "sell", ref_price, qty_raw, why))
+                _record_fill(j, "sell", 0.0, np.nan, vwap_raw[j], "rejected", why)
                 unfilled_rows.append({"date": day, "asset_id": asset, "side": "sell",
                                       "reason": why, "unfilled_quantity": qty_raw,
                                       "reference_price_raw": vwap_raw[j]})
                 continue
             if not np.isfinite(adv[j]) or adv[j] <= 0:
                 fills.append(self._reject(oid, asset, day, "sell", ref_price, qty_raw, "adv_missing"))
+                _record_fill(j, "sell", 0.0, np.nan, vwap_raw[j], "rejected", "adv_missing")
                 unfilled_rows.append({
                     "date": day, "asset_id": asset, "side": "sell",
                     "reason": "adv_missing", "unfilled_quantity": qty_raw,
@@ -440,6 +480,7 @@ class ExecutionEngine:
             )
             if qty_raw <= 0:
                 fills.append(self._reject(oid, asset, day, "sell", ref_price, 0.0, "adv_cap_zero"))
+                _record_fill(j, "sell", 0.0, np.nan, vwap_raw[j], "rejected", "adv_cap")
                 unfilled_rows.append({
                     "date": day, "asset_id": asset, "side": "sell",
                     "reason": "adv_cap", "unfilled_quantity": delta_raw,
@@ -461,6 +502,7 @@ class ExecutionEngine:
                         "turnover_cap_zero",
                     )
                 )
+                _record_fill(j, "sell", 0.0, np.nan, vwap_raw[j], "rejected", "turnover_cap")
                 unfilled_rows.append({
                     "date": day, "asset_id": asset, "side": "sell",
                     "reason": "turnover_cap", "unfilled_quantity": delta_raw,
@@ -505,6 +547,11 @@ class ExecutionEngine:
                 ),
                 adv_participation=float(notional / adv[j]) if adv[j] and adv[j] > 0 else np.nan,
             ))
+            _record_fill(
+                j, "sell", qty_raw, fill_price_raw, float(vwap_raw[j]),
+                "filled" if not (capped or turnover_capped) else "partial",
+                "turnover_cap" if turnover_capped else ("adv_cap" if capped else ""),
+            )
             if capped or turnover_capped:
                 unfilled_rows.append({"date": day, "asset_id": asset, "side": "sell",
                                       "reason": "turnover_cap" if turnover_capped else "adv_cap",
@@ -536,10 +583,12 @@ class ExecutionEngine:
                 target_weight=float(tw_row[j]),
                 current_weight=float(mkt_val[j] / equity), sequence=order_seq,
             ))
+            _record_order(j, "buy", gap_raw, "rebalance_increase")
             exchange_qty = _round_buy_quantity(gap_raw, int(lot), int(step))
             if exchange_qty <= 0:
                 why = "below_min_buy_quantity"
                 fills.append(self._reject(oid, asset, day, "buy", ref_price, gap_raw, why))
+                _record_fill(j, "buy", 0.0, np.nan, vwap_raw[j], "rejected", why)
                 unfilled_rows.append({
                     "date": day, "asset_id": asset, "side": "buy",
                     "reason": why, "unfilled_quantity": gap_raw,
@@ -550,6 +599,7 @@ class ExecutionEngine:
             blocked, why = self._blocked(ti, j, "buy", allow_buy, tradable_price)
             if blocked:
                 fills.append(self._reject(oid, asset, day, "buy", ref_price, gap_raw, why))
+                _record_fill(j, "buy", 0.0, np.nan, vwap_raw[j], "rejected", why)
                 unfilled_rows.append({"date": day, "asset_id": asset, "side": "buy",
                                       "reason": why, "unfilled_quantity": gap_raw,
                                       "reference_price_raw": vwap_raw[j]})
@@ -557,6 +607,7 @@ class ExecutionEngine:
             fill_price_raw = self.costs.slippage_price(float(vwap_raw[j]), "buy")
             if not np.isfinite(adv[j]) or adv[j] <= 0:
                 fills.append(self._reject(oid, asset, day, "buy", ref_price, gap_raw, "adv_missing"))
+                _record_fill(j, "buy", 0.0, np.nan, vwap_raw[j], "rejected", "adv_missing")
                 unfilled_rows.append({
                     "date": day, "asset_id": asset, "side": "buy",
                     "reason": "adv_missing", "unfilled_quantity": gap_raw,
@@ -591,6 +642,7 @@ class ExecutionEngine:
                     else ("insufficient_cash" if cash_capped else "adv_cap_zero")
                 )
                 fills.append(self._reject(oid, asset, day, "buy", ref_price, gap_raw, why))
+                _record_fill(j, "buy", 0.0, np.nan, vwap_raw[j], "rejected", why.removesuffix("_zero"))
                 unfilled_rows.append({"date": day, "asset_id": asset, "side": "buy",
                                       "reason": why.removesuffix("_zero"),
                                       "unfilled_quantity": gap_raw,
@@ -635,6 +687,17 @@ class ExecutionEngine:
                 ),
                 adv_participation=float(notional / adv[j]) if adv[j] and adv[j] > 0 else np.nan,
             ))
+            _record_fill(
+                j, "buy", qty_raw, fill_price_raw, float(vwap_raw[j]), status,
+                "turnover_cap" if turnover_capped
+                else (
+                    "adv_cap" if capped
+                    else (
+                        "insufficient_cash" if cash_capped
+                        else ("lot_size_rounding" if exchange_capped else "")
+                    )
+                ),
+            )
             if status == "partial":
                 unfilled_rows.append({
                     "date": day, "asset_id": asset, "side": "buy",
@@ -652,11 +715,61 @@ class ExecutionEngine:
                     "reference_price_raw": vwap_raw[j],
                 })
 
-        return {"cash": cash, "cost": total_cost, "explicit_cost": explicit_cost,
-                "buy_amount": buy_amount, "sell_amount": sell_amount,
-                "buy_reference_amount": buy_reference_amount,
-                "sell_reference_amount": sell_reference_amount,
-                "realized": realized, "order_seq": order_seq}
+        # ---- 组装持仓迁移记录 ----
+        tol = 1e-9
+        for j in range(len(self.assets)):
+            pre_raw = float(raw_held[j])
+            tgt_raw = float(raw_target_shares[j])
+            if pre_raw <= tol and tgt_raw <= tol and j not in pp_order_qty_raw:
+                continue
+            order_raw = pp_order_qty_raw.get(j, 0.0)
+            fill_raw = pp_fill_qty_raw.get(j, 0.0)
+            if tgt_raw <= tol < pre_raw:
+                action = "exit"
+            elif tgt_raw > pre_raw + tol:
+                action = "buy"
+            elif tgt_raw < pre_raw - tol:
+                action = "sell"
+            else:
+                action = "hold"
+            status = pp_status.get(j, "no_order")
+            reject_reason = pp_reject_reason.get(j, "")
+            reason = pp_reason.get(j, "hold")
+            fill_price = pp_fill_price.get(j, np.nan)
+            ref_price = pp_reference_price.get(j, np.nan)
+            if abs(order_raw) > tol:
+                fill_ratio = min(max(abs(fill_raw / order_raw), 0.0), 1.0)
+            elif abs(fill_raw) > tol:
+                fill_ratio = 1.0
+            else:
+                fill_ratio = 1.0 if action == "hold" else 0.0
+            post_raw = pre_raw + fill_raw
+            ratio_j = ratio[j] if np.isfinite(ratio[j]) and ratio[j] > 0 else 1.0
+            pre_adj = float(shares_start[j])
+            post_adj = float(shares[j])
+            tgt_adj = tgt_raw * ratio_j
+            order_adj = order_raw * ratio_j
+            fill_adj = fill_raw * ratio_j
+            position_period_rows.append(PositionPeriodRecord(
+                signal_date=signal_day, date=day, asset_id=self.assets[j],
+                action=action,
+                pre_quantity_raw=pre_raw, pre_quantity_adjusted=pre_adj,
+                target_quantity_raw=tgt_raw, target_quantity_adjusted=tgt_adj,
+                order_quantity_raw=order_raw, order_quantity_adjusted=order_adj,
+                fill_quantity_raw=fill_raw, fill_quantity_adjusted=fill_adj,
+                post_quantity_raw=post_raw, post_quantity_adjusted=post_adj,
+                reason=reason, fill_price=fill_price, reference_price=ref_price,
+                fill_ratio=fill_ratio, status=status, reject_reason=reject_reason,
+            ))
+
+        return {
+            "cash": cash, "cost": total_cost, "explicit_cost": explicit_cost,
+            "buy_amount": buy_amount, "sell_amount": sell_amount,
+            "buy_reference_amount": buy_reference_amount,
+            "sell_reference_amount": sell_reference_amount,
+            "realized": realized, "order_seq": order_seq,
+            "position_period_rows": position_period_rows,
+        }
 
     # ---------- 辅助 ----------
 
@@ -716,7 +829,7 @@ class ExecutionEngine:
     def _finalize(
         self, holdings_shares, holdings_cost_basis, holdings_unrealized_pnl,
         holdings_value, ledger_rows, orders, fills, unfilled_rows,
-        initial_capital, identity_rows,
+        initial_capital, identity_rows, position_period_rows,
     ) -> ExecutionOutput:
         dates, assets = self.dates, self.assets
         ledger = pd.DataFrame(ledger_rows).set_index("date")
@@ -781,4 +894,5 @@ class ExecutionEngine:
             holdings_value=hv, actual_weights=actual_weights, cash_ledger=ledger,
             costs=costs_df, unfilled_summary=unfilled,
             accounting_identity=identity,
+            position_period_records=tuple(position_period_rows),
         )

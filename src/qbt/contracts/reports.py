@@ -177,3 +177,4 @@ class LongOnlyFactorBacktestResult:
     portfolio_drawdown: pd.Series = field(default_factory=pd.Series)
     benchmark_drawdown: pd.Series = field(default_factory=pd.Series)
     excess_drawdown: pd.Series = field(default_factory=pd.Series)
+    position_period_analysis: pd.DataFrame = field(default_factory=pd.DataFrame)

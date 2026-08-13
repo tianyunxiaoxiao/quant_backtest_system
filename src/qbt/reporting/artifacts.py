@@ -163,6 +163,15 @@ def write_backtest_artifacts(
     writer.write_dataframe(result.diagnostics.exclusion_reasons, "exclusion_reasons")
     writer.write_dataframe(result.diagnostics.unfilled_summary, "unfilled_summary", index=False)
     writer.write_dataframe(result.diagnostics.accounting_identity, "accounting_identity")
+    writer.write_dataframe(
+        result.position_period_analysis,
+        "position_period_analysis",
+        index=False,
+    )
+    writer.write_json(
+        _position_period_summary(result.position_period_analysis),
+        "position_analysis_summary",
+    )
     writer.write_json(
         {
             "timeline": result.diagnostics.timeline,
@@ -252,6 +261,7 @@ def verify_backtest_artifact_roundtrip(
     frame("exclusion_reasons", result.diagnostics.exclusion_reasons)
     frame("unfilled_summary", result.diagnostics.unfilled_summary)
     frame("accounting_identity", result.diagnostics.accounting_identity)
+    frame("position_period_analysis", result.position_period_analysis)
 
     payload("performance_report", _performance_to_dict(result.performance))
     payload("alpha_beta", _alphabeta_to_dict(result.alpha_beta))
@@ -279,6 +289,10 @@ def verify_backtest_artifact_roundtrip(
             "warnings": result.diagnostics.warnings,
             "disclosures": result.diagnostics.disclosures,
         },
+    )
+    payload(
+        "position_analysis_summary",
+        _position_period_summary(result.position_period_analysis),
     )
 
     manifest_path = safe_artifact_path(root, "run_manifest", "json")
@@ -522,6 +536,9 @@ def load_backtest_artifacts(output_dir: Path) -> LongOnlyFactorBacktestResult:
         portfolio_drawdown=daily["portfolio_drawdown"],
         benchmark_drawdown=daily["benchmark_drawdown"],
         excess_drawdown=daily["excess_drawdown"],
+        position_period_analysis=pd.read_parquet(
+            safe_artifact_path(root, "position_period_analysis", "parquet")
+        ),
     )
 
 
@@ -626,6 +643,49 @@ def _selection_to_dict(report):
         "diagnostic_target_weight_returns": _canonical(report.diagnostic_target_weight_returns),
         "notes": report.notes,
     }
+
+
+def _position_period_summary(df: pd.DataFrame) -> dict:
+    """生成持仓迁移表的轻量级 JSON 摘要。"""
+    if df.empty:
+        return {
+            "n_rows": 0,
+            "n_dates": 0,
+            "n_assets": 0,
+            "action_counts": {},
+            "status_counts": {},
+            "total_buy_shares": 0.0,
+            "total_sell_shares": 0.0,
+            "avg_fill_ratio": None,
+        }
+    action_counts = df["action"].value_counts().to_dict()
+    status_counts = df["status"].value_counts().to_dict()
+    buy_mask = df["fill_quantity_raw"] > 0
+    sell_mask = df["fill_quantity_raw"] < 0
+    total_buy = float(df.loc[buy_mask, "fill_quantity_raw"].sum())
+    total_sell = float(-df.loc[sell_mask, "fill_quantity_raw"].sum())
+    ordered_mask = df["order_quantity_raw"].abs() > 1e-9
+    avg_fill_ratio = (
+        float(df.loc[ordered_mask, "fill_ratio"].mean())
+        if ordered_mask.any()
+        else None
+    )
+    return {
+        "n_rows": int(len(df)),
+        "n_dates": int(df["date"].nunique()),
+        "n_assets": int(df["asset_id"].nunique()),
+        "action_counts": {str(k): int(v) for k, v in action_counts.items()},
+        "status_counts": {str(k): int(v) for k, v in status_counts.items()},
+        "total_buy_shares": _canonical_value(total_buy),
+        "total_sell_shares": _canonical_value(total_sell),
+        "avg_fill_ratio": _canonical_value(avg_fill_ratio),
+    }
+
+
+def _canonical_value(v):
+    if isinstance(v, float):
+        return None if not np.isfinite(v) else float(v)
+    return v
 
 
 def _constraint_to_dict(report):

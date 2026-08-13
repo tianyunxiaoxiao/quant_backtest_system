@@ -34,6 +34,7 @@ class MarkdownReportBuilder:
         lines.extend(self._style_exposure(result))
         lines.extend(self._selection_diagnostics(result))
         lines.extend(self._costs_and_turnover(result))
+        lines.extend(self._position_analysis(result))
         lines.extend(self._constraints(result))
         lines.extend(self._disclosures(result))
         lines.extend(self._data_lineage(result))
@@ -235,8 +236,71 @@ class MarkdownReportBuilder:
             lines.append("")
         return lines
 
+    def _position_analysis(self, result: LongOnlyFactorBacktestResult) -> list[str]:
+        lines = ["## 8. 调仓持仓分析", ""]
+        df = result.position_period_analysis
+        if df.empty:
+            lines.append("本期无持仓迁移记录。")
+            lines.append("")
+            return lines
+        summary = {
+            "总记录数": int(len(df)),
+            "调仓日数": int(df["date"].nunique()),
+            "涉及标的数": int(df["asset_id"].nunique()),
+            "买入记录": int((df["action"] == "buy").sum()),
+            "卖出记录": int((df["action"] == "sell").sum()),
+            "清仓记录": int((df["action"] == "exit").sum()),
+            "持仓不变": int((df["action"] == "hold").sum()),
+            "完全成交": int((df["status"] == "filled").sum()),
+            "部分成交": int((df["status"] == "partial").sum()),
+            "拒绝/未成交": int((df["status"] == "rejected").sum()),
+        }
+        for k, v in summary.items():
+            lines.append(f"- **{k}**: {v}")
+        buy_mask = df["fill_quantity_raw"] > 0
+        sell_mask = df["fill_quantity_raw"] < 0
+        if buy_mask.any():
+            lines.append(
+                f"- **买入总股数**: {df.loc[buy_mask, 'fill_quantity_raw'].sum():,.0f}"
+            )
+        if sell_mask.any():
+            lines.append(
+                f"- **卖出总股数**: {-df.loc[sell_mask, 'fill_quantity_raw'].sum():,.0f}"
+            )
+        lines.append("")
+        display_cols = [
+            "date", "asset_id", "action", "pre_quantity_raw", "target_quantity_raw",
+            "order_quantity_raw", "fill_quantity_raw", "post_quantity_raw",
+            "fill_price", "fill_ratio", "status",
+        ]
+        display = df[[c for c in display_cols if c in df.columns]].copy()
+        display = display.rename(columns={
+            "date": "成交日",
+            "asset_id": "标的",
+            "action": "动作",
+            "pre_quantity_raw": "调仓前(股)",
+            "target_quantity_raw": "目标(股)",
+            "order_quantity_raw": "下单(股)",
+            "fill_quantity_raw": "成交(股)",
+            "post_quantity_raw": "调仓后(股)",
+            "fill_price": "成交价",
+            "fill_ratio": "成交比例",
+            "status": "状态",
+        })
+        for col in ("成交价", "成交比例"):
+            if col in display.columns:
+                display[col] = display[col].apply(_fmt_num)
+        for col in ("调仓前(股)", "目标(股)", "下单(股)", "成交(股)", "调仓后(股)"):
+            if col in display.columns:
+                display[col] = display[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
+        lines.append("### 持仓迁移明细（按成交日排序）")
+        lines.append("")
+        lines.extend(self._table(display))
+        lines.append("")
+        return lines
+
     def _constraints(self, result: LongOnlyFactorBacktestResult) -> list[str]:
-        lines = ["## 8. 约束检查", ""]
+        lines = ["## 9. 约束检查", ""]
         rows = []
         for c in result.constraint_reports:
             rows.append(
@@ -267,7 +331,7 @@ class MarkdownReportBuilder:
         return lines
 
     def _disclosures(self, result: LongOnlyFactorBacktestResult) -> list[str]:
-        lines = ["## 9. 数据缺失、排除与风险披露", ""]
+        lines = ["## 10. 数据缺失、排除与风险披露", ""]
         if not result.diagnostics.exclusion_reasons.empty:
             lines.append("### 选股排除汇总")
             lines.append("")
@@ -292,7 +356,7 @@ class MarkdownReportBuilder:
         return lines
 
     def _data_lineage(self, result: LongOnlyFactorBacktestResult) -> list[str]:
-        lines = ["## 10. 数据谱系与指标定义", ""]
+        lines = ["## 11. 数据谱系与指标定义", ""]
         lines.append("| 数据集 | URI | 内容哈希 | 行数 | 列数 | 日期范围 |")
         lines.append("| --- | --- | --- | --- | --- | --- |")
         for ref in result.run_manifest.dataset_refs:

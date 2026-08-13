@@ -13,8 +13,10 @@ __all__ = [
     "RunManifest",
     "OrderRecord",
     "FillRecord",
+    "PositionPeriodRecord",
     "orders_to_frame",
     "fills_to_frame",
+    "position_period_to_frame",
 ]
 
 
@@ -113,6 +115,37 @@ class FillRecord:
         return self.explicit_cost + self.slippage_cost + self.impact_cost
 
 
+@dataclass(frozen=True)
+class PositionPeriodRecord:
+    """单个调仓日单只标的持仓迁移记录。
+
+    数量使用原始股数（真实交易所股数）作为主要口径，同时保留复权股数
+    以便与内部市值/PNL 账本对齐。买卖方向由 ``action`` 显式标注，
+    ``fill_ratio`` 衡量目标订单的实际完成比例。
+    """
+
+    signal_date: pd.Timestamp
+    date: pd.Timestamp
+    asset_id: str
+    action: str
+    pre_quantity_raw: float
+    pre_quantity_adjusted: float
+    target_quantity_raw: float
+    target_quantity_adjusted: float
+    order_quantity_raw: float
+    order_quantity_adjusted: float
+    fill_quantity_raw: float
+    fill_quantity_adjusted: float
+    post_quantity_raw: float
+    post_quantity_adjusted: float
+    reason: str
+    fill_price: float
+    reference_price: float
+    fill_ratio: float
+    status: str
+    reject_reason: str = ""
+
+
 _ORDER_COLUMNS = (
     "order_id", "asset_id", "signal_date", "order_date", "side", "target_quantity",
     "target_amount", "reference_price", "reason", "target_weight", "current_weight", "sequence",
@@ -142,3 +175,24 @@ def fills_to_frame(fills: tuple[FillRecord, ...]) -> pd.DataFrame:
     df["explicit_cost"] = df["commission"] + df["stamp_duty"] + df["transfer_fee"]
     df["total_cost"] = df["explicit_cost"] + df["slippage_cost"] + df["impact_cost"]
     return df
+
+
+_POSITION_PERIOD_COLUMNS = (
+    "signal_date", "date", "asset_id", "action",
+    "pre_quantity_raw", "pre_quantity_adjusted",
+    "target_quantity_raw", "target_quantity_adjusted",
+    "order_quantity_raw", "order_quantity_adjusted",
+    "fill_quantity_raw", "fill_quantity_adjusted",
+    "post_quantity_raw", "post_quantity_adjusted",
+    "reason", "fill_price", "reference_price", "fill_ratio", "status", "reject_reason",
+)
+
+
+def position_period_to_frame(records: tuple[PositionPeriodRecord, ...]) -> pd.DataFrame:
+    """把 PositionPeriodRecord 序列转成可持久化的 DataFrame。"""
+    if not records:
+        return pd.DataFrame(columns=list(_POSITION_PERIOD_COLUMNS))
+    return pd.DataFrame(
+        [[getattr(r, c) for c in _POSITION_PERIOD_COLUMNS] for r in records],
+        columns=list(_POSITION_PERIOD_COLUMNS),
+    )

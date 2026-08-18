@@ -465,3 +465,37 @@ button { cursor: pointer; }
   .run-sidebar { display: none; }
   .topbar { grid-template-columns: 1fr auto; }
 }
+
+/* ---- 2026-08-18: 因子值导入 / 交易费用 / 历史持仓 ---- */
+
+.upload-panel { margin: 10px 0 16px; padding: 12px 14px; }
+.upload-panel .data-table { margin-top: 10px; }
+
+.field-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.upload-msg {
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--green-soft);
+  color: var(--green);
+}
+.upload-msg.error { background: #f8e9e6; color: #ad3e2d; }
+
+.imported-list { margin-top: 10px; overflow-x: auto; }
+
+.ghost-button {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+.ghost-button:hover { border-color: #ad3e2d; color: #ad3e2d; }

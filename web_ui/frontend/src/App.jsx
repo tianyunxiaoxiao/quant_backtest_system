@@ -12,6 +12,7 @@ const tabs = [
   { id: 'style', label: '风格暴露' },
   { id: 'costs', label: '执行成本' },
   { id: 'constraints', label: '持仓约束' },
+  { id: 'positions', label: '历史持仓' },
   { id: 'report', label: '报告' },
   { id: 'artifacts', label: '产物' },
 ]

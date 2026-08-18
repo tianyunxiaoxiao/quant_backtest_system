@@ -14,13 +14,21 @@ from qbt.data.ingest_index import ALL_A_INDEX_ID, INDEX_SPECS, ingest_index_memb
 from qbt.data.panel import load_price_panel
 from qbt.data.portal import PortalConfig
 from qbt.factors.demo import DEMO_FACTOR_SPECS, build_demo_factor
+from qbt.factors.values import load_factor_values
 from qbt.reporting import LongOnlyFactorReporter
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="指数内多头因子回测")
-    p.add_argument("--factor", required=True, choices=sorted(DEMO_FACTOR_SPECS),
-                   help="演示因子 ID")
+    p.add_argument("--factor", default=None, choices=sorted(DEMO_FACTOR_SPECS),
+                   help="演示因子 ID (与 --factor-values 二选一)")
+    p.add_argument("--factor-values", default=None,
+                   help="外部因子值 parquet 路径 (宽表: 日期行 x asset_id 列, 与 --factor 二选一)")
+    p.add_argument("--factor-id", default=None,
+                   help="外部因子值回测使用的 factor_id (默认取文件名去扩展名)")
+    p.add_argument("--factor-direction", type=int, default=1, choices=(1, -1),
+                   help="外部因子值方向: +1 越大越好 (默认), -1 越小越好; 回测前声明, 不许事后翻转")
+    p.add_argument("--factor-desc", default=None, help="外部因子值描述 (默认自动生成)")
     p.add_argument(
         "--index",
         default=None,
@@ -40,7 +48,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output", default=None, help="产物输出目录 (默认: artifacts/lof_{run_id})")
     p.add_argument("--capital", type=float, default=100_000_000.0, help="初始资金")
     p.add_argument("--no-report", action="store_true", help="只跑回测, 不生成报告")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if bool(args.factor) == bool(args.factor_values):
+        p.error("--factor 与 --factor-values 必须且只能提供一个")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -57,32 +68,46 @@ def main(argv: list[str] | None = None) -> int:
         PortalConfig(warehouse_dir=warehouse, index_source_dir=index_dir, style_warmup_days=300)
     )
     if args.index in (None, ALL_A_INDEX_ID):
-        assets = sorted(
-            {
-                str(asset)
-                for path in (warehouse / "daily_prices").glob("*.parquet")
-                for asset in pd.read_parquet(path, columns=["asset_id"])["asset_id"].dropna().unique()
-            }
-        )
         index_id = ALL_A_INDEX_ID
     else:
-        monthly, _ = ingest_index_membership(index_dir, INDEX_SPECS[args.index])
-        assets = sorted(monthly["asset_id"].unique())
         index_id = args.index
-    panel = load_price_panel(
-        warehouse,
-        assets=assets,
-        start=pd.Timestamp("2015-01-01"),
-        end=pd.Timestamp("2026-04-07"),
-        trading_days=portal.trading_calendar(),
-    )
-    sources = {
-        "adj_close": panel.wide["adj_close"],
-        "float_mktcap": panel.wide.get("float_mktcap"),
-        "turnover_rate": panel.wide.get("turnover_rate"),
-        "pb": panel.wide.get("pb"),
-    }
-    factor = build_demo_factor(args.factor, sources, data_version="cli", code_version="cli")
+
+    if args.factor_values:
+        # 外部因子值: 直接构建 FactorFrame, 无需加载行情面板计算公式因子。
+        factor = load_factor_values(
+            args.factor_values,
+            factor_id=args.factor_id or Path(args.factor_values).stem,
+            direction=args.factor_direction,
+            description=args.factor_desc or "",
+            data_version="cli",
+            code_version="cli",
+        )
+    else:
+        if index_id == ALL_A_INDEX_ID:
+            assets = sorted(
+                {
+                    str(asset)
+                    for path in (warehouse / "daily_prices").glob("*.parquet")
+                    for asset in pd.read_parquet(path, columns=["asset_id"])["asset_id"].dropna().unique()
+                }
+            )
+        else:
+            monthly, _ = ingest_index_membership(index_dir, INDEX_SPECS[index_id])
+            assets = sorted(monthly["asset_id"].unique())
+        panel = load_price_panel(
+            warehouse,
+            assets=assets,
+            start=pd.Timestamp("2015-01-01"),
+            end=pd.Timestamp("2026-04-07"),
+            trading_days=portal.trading_calendar(),
+        )
+        sources = {
+            "adj_close": panel.wide["adj_close"],
+            "float_mktcap": panel.wide.get("float_mktcap"),
+            "turnover_rate": panel.wide.get("turnover_rate"),
+            "pb": panel.wide.get("pb"),
+        }
+        factor = build_demo_factor(args.factor, sources, data_version="cli", code_version="cli")
 
     config = qbt.LongOnlyFactorBacktestConfig(
         start_date=date.fromisoformat(args.start),

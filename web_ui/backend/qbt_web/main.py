@@ -10,7 +10,7 @@ from starlette.responses import FileResponse
 
 from qbt_web import db
 from qbt_web.config import settings
-from qbt_web.routers import artifacts, meta, runs
+from qbt_web.routers import artifacts, factor_values, meta, runs
 
 app = FastAPI(title=settings.app_name)
 
@@ -25,6 +25,7 @@ app.add_middleware(
 app.include_router(meta.router)
 app.include_router(runs.router)
 app.include_router(artifacts.router)
+app.include_router(factor_values.router)
 
 # Static frontend files
 dist_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"

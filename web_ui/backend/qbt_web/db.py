@@ -33,6 +33,21 @@ CREATE TABLE IF NOT EXISTS runs (
     created_at TEXT,
     completed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS imported_factors (
+    factor_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source TEXT,
+    direction INTEGER NOT NULL DEFAULT 1,
+    file_path TEXT NOT NULL,
+    n_dates INTEGER,
+    n_assets INTEGER,
+    date_start TEXT,
+    date_end TEXT,
+    coverage_ratio REAL,
+    content_hash TEXT,
+    created_at TEXT
+);
 """
 
 
@@ -56,6 +71,22 @@ class RunRecord:
     artifact_dir: str | None
     created_at: str | None
     completed_at: str | None
+
+
+@dataclass(frozen=True)
+class ImportedFactorRecord:
+    factor_id: str
+    name: str
+    source: str | None
+    direction: int
+    file_path: str
+    n_dates: int | None
+    n_assets: int | None
+    date_start: str | None
+    date_end: str | None
+    coverage_ratio: float | None
+    content_hash: str | None
+    created_at: str | None
 
 
 @contextmanager
@@ -170,5 +201,56 @@ def delete_run(run_id: str) -> bool:
     init_db()
     with _conn() as conn:
         cur = conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        conn.commit()
+    return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Imported factor values registry (2026-08-18)
+# ---------------------------------------------------------------------------
+
+
+def create_imported_factor(rec: ImportedFactorRecord) -> None:
+    init_db()
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO imported_factors (
+                factor_id, name, source, direction, file_path,
+                n_dates, n_assets, date_start, date_end,
+                coverage_ratio, content_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rec.factor_id, rec.name, rec.source, rec.direction, rec.file_path,
+                rec.n_dates, rec.n_assets, rec.date_start, rec.date_end,
+                rec.coverage_ratio, rec.content_hash, rec.created_at or _now(),
+            ),
+        )
+        conn.commit()
+
+
+def get_imported_factor(factor_id: str) -> ImportedFactorRecord | None:
+    init_db()
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM imported_factors WHERE factor_id = ?", (factor_id,)
+        ).fetchone()
+    return None if row is None else ImportedFactorRecord(**dict(row))
+
+
+def list_imported_factors() -> list[ImportedFactorRecord]:
+    init_db()
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM imported_factors ORDER BY created_at DESC"
+        ).fetchall()
+    return [ImportedFactorRecord(**dict(r)) for r in rows]
+
+
+def delete_imported_factor(factor_id: str) -> bool:
+    init_db()
+    with _conn() as conn:
+        cur = conn.execute("DELETE FROM imported_factors WHERE factor_id = ?", (factor_id,))
         conn.commit()
     return cur.rowcount > 0

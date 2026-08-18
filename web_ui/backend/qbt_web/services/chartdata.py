@@ -32,8 +32,22 @@ def _read_parquet(run_dir: Path, name: str) -> pd.DataFrame:
 
 
 def nav_data(run_dir: Path) -> dict[str, Any]:
+    """净值曲线以累计收益率口径输出 (2026-08-18): nav - 1, 0 为起点。
+
+    超额收益率 = 超额净值 - 1 (几何超额 portfolio_nav / benchmark_nav)。
+    """
     df = _read_parquet(run_dir, "daily_returns")
-    return _to_series(df, ["portfolio_nav", "benchmark_nav", "excess_nav"])
+    if df.empty or "portfolio_nav" not in df.columns:
+        return {"dates": [], "series": []}
+    returns = pd.DataFrame(index=df.index)
+    for col, label in (
+        ("portfolio_nav", "组合收益率"),
+        ("benchmark_nav", "基准收益率"),
+        ("excess_nav", "超额收益率"),
+    ):
+        if col in df.columns:
+            returns[label] = df[col].astype("float64") - 1.0
+    return _to_series(returns, list(returns.columns))
 
 
 def drawdown_data(run_dir: Path) -> dict[str, Any]:

@@ -37,4 +37,17 @@ CLI 默认从本目录的 `warehouse/` 和 `data/index_membership_source/` 读�
   `artifacts/` 已恢复为空。
 - 最终占用 974,624 KiB（约 952 MiB），原项目约 2.8 GiB。
 
+## 增量更新（2026-08-18）：外部因子值直接回测
+
+- 新增 `src/qbt/factors/values.py`：从外部 parquet 宽表（日期行 × asset_id 列）
+  直接构建 `FactorFrame` 回测，不经过公式因子；方向（+1/-1）回测前显式声明。
+- CLI 新增 `--factor-values <parquet>`、`--factor-id`、`--factor-direction`、
+  `--factor-desc` 参数，与 `--factor`（演示公式因子）二选一；保留本副本原有的
+  `data/index_membership_source` 默认指数目录，自包含约束不变。
+- 原完整测试套件 115 项测试全部通过（新增 13 项因子值契约测试）；Ruff 通过。
+- 使用外部导出因子值（1,277 日 × 5,417 资产）实际 CLI 回测通过：
+  中证 500、月频、2024-01-02 至 2024-03-31，58 个交易日，组合累计收益
+  +11.06%，账户恒等式残差 `0.000000 bps`，产物 39 个，与原系统同参数结果一致。
+- 源文件数量由 36 个增至 37 个；交付前 `artifacts/` 已恢复为空。
+
 除清单自身外的最终文件级 SHA-256 清单见 `SHA256SUMS`。

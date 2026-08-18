@@ -43,7 +43,10 @@ def _record_to_out(record: db.RunRecord, *, include_config: bool = False) -> dic
 @router.post("", response_model=RunDetail, status_code=202)
 async def create_run(payload: RunConfig, background_tasks: BackgroundTasks):
     data = payload.model_dump()
-    info = submit_run(data)
+    try:
+        info = submit_run(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     background_tasks.add_task(execute_run, info["run_id"])
     record = db.get_run(info["run_id"])
     if record is None:

@@ -1,12 +1,14 @@
 """Artifact serving and chart-data endpoints."""
 from __future__ import annotations
 
+import io
 import mimetypes
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from qbt_web import db
 from qbt_web.config import settings
@@ -76,3 +78,87 @@ async def get_report_markdown(run_id: str):
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Report not ready")
     return FileResponse(target, media_type="text/markdown")
+
+
+# ---------------------------------------------------------------------------
+# 历史持仓 (2026-08-18): 最新两期调仓明细 + 全部成交历史下载
+# ---------------------------------------------------------------------------
+
+_POSITION_COLUMNS = [
+    "fill_date", "asset_id", "side", "filled_quantity", "fill_price",
+    "filled_amount", "commission", "stamp_duty", "transfer_fee",
+    "explicit_cost", "total_cost", "status",
+]
+
+
+def _load_fills(root: Path) -> pd.DataFrame:
+    path = root / "fills.parquet"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Fills not found")
+    return pd.read_parquet(path)
+
+
+def _fill_record(row: pd.Series) -> dict[str, Any]:
+    return {
+        "fill_date": str(row["fill_date"]),
+        "asset_id": str(row["asset_id"]),
+        "side": str(row["side"]),
+        "filled_quantity": float(row["filled_quantity"]),
+        "fill_price": float(row["fill_price"]),
+        "filled_amount": float(row["filled_amount"]),
+        "commission": float(row["commission"]),
+        "stamp_duty": float(row["stamp_duty"]),
+        "transfer_fee": float(row["transfer_fee"]),
+        "explicit_cost": float(row["explicit_cost"]),
+        "total_cost": float(row["total_cost"]),
+        "status": str(row["status"]),
+    }
+
+
+@router.get("/{run_id}/positions/latest")
+async def latest_positions(run_id: str, periods: int = 2):
+    """最新 N 期 (默认 2 期) 调仓成交明细, 按期分组返回。"""
+    root = _artifact_dir(run_id)
+    fills = _load_fills(root)
+    executed = fills[fills["filled_quantity"] > 0].copy()
+    if executed.empty:
+        return {"periods": []}
+    periods = max(1, min(int(periods), 24))
+    # 唯一成交日按时间倒序取最新 N 期, 期内按标的升序。
+    latest_dates = sorted(executed["fill_date"].unique(), reverse=True)[:periods]
+    out_periods = []
+    for d in latest_dates:
+        day = executed[executed["fill_date"] == d].sort_values("asset_id")
+        records = [_fill_record(row) for _, row in day.iterrows()]
+        n_buy = int((day["side"] == "buy").sum())
+        n_sell = int((day["side"] == "sell").sum())
+        out_periods.append(
+            {
+                "date": str(pd.Timestamp(d).date()),
+                "n_records": len(records),
+                "n_buy": n_buy,
+                "n_sell": n_sell,
+                "buy_amount": float(day.loc[day["side"] == "buy", "filled_amount"].sum()),
+                "sell_amount": float(day.loc[day["side"] == "sell", "filled_amount"].sum()),
+                "explicit_cost": float(day["explicit_cost"].sum()),
+                "records": records,
+            }
+        )
+    return {"periods": out_periods}
+
+
+@router.get("/{run_id}/positions/export")
+async def export_positions(run_id: str):
+    """全部历史成交记录导出为 CSV (utf-8-sig, Excel 可直接打开中文)。"""
+    root = _artifact_dir(run_id)
+    fills = _load_fills(root)
+    columns = [c for c in _POSITION_COLUMNS if c in fills.columns]
+    df = fills[columns].sort_values(["fill_date", "asset_id"])
+    buf = io.StringIO()
+    df.to_csv(buf, index=False, encoding="utf-8-sig")
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue().encode("utf-8-sig")]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{run_id}_all_fills.csv"'},
+    )

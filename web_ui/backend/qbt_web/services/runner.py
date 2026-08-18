@@ -38,8 +38,12 @@ def submit_run(payload: dict[str, Any]) -> dict[str, Any]:
         "max_single_weight": payload["max_single_weight"],
         "slippage_bps": payload["slippage_bps"],
         "commission_rate": payload["commission_rate"],
+        "stamp_duty_rate": payload.get("stamp_duty_rate"),
+        "transfer_fee_rate": payload.get("transfer_fee_rate"),
         "fill_price_field": payload["fill_price_field"],
         "lookback": payload.get("lookback"),
+        "factor_source": payload.get("factor_source", "demo"),
+        "factor_direction": payload.get("factor_direction"),
         "business_summary": {
             "selection_fraction": payload["selection_fraction"],
             "weighting_method": payload["weighting_method"],
@@ -50,6 +54,20 @@ def submit_run(payload: dict[str, Any]) -> dict[str, Any]:
             "max_single_weight": payload["max_single_weight"],
         },
     }
+
+    # 外部因子值回测: 解析导入登记, 把文件路径与方向冻结进 run 配置,
+    # 保证 run 记录可复现 (文件后续被删除时 run 会显式失败, 不静默换因子)。
+    if config["factor_source"] == "values":
+        record = db.get_imported_factor(config["factor_id"])
+        if record is None:
+            raise ValueError(f"导入因子不存在: {config['factor_id']}")
+        if not Path(record.file_path).is_file():
+            raise ValueError(f"导入因子文件缺失: {record.file_path}")
+        config["factor_values_path"] = record.file_path
+        config["factor_values_name"] = record.name
+        config["factor_values_source"] = record.source
+        if config["factor_direction"] is None:
+            config["factor_direction"] = record.direction
 
     db.create_run(run_id, payload["factor_id"], payload["index_id"], config, artifact_dir)
     return {"run_id": run_id, "status": "pending"}

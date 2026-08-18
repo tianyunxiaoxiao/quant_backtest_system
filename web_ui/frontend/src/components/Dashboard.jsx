@@ -2,8 +2,10 @@ import React, { useEffect, useState } from 'react'
 import {
   fetchArtifacts,
   fetchChartData,
+  fetchLatestPositions,
   fetchReportMarkdown,
   fetchRun,
+  positionsExportUrl,
 } from '../api'
 import LineChart from './charts/LineChart'
 import BarChart from './charts/BarChart'
@@ -14,9 +16,42 @@ const fmtPct = (v) => {
   if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
   return `${(v * 100).toFixed(2)}%`
 }
-const fmtNum = (v) => {
+const fmtNum = (v, digits = 3) => {
   if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
-  return v.toFixed(3)
+  return v.toFixed(digits)
+}
+const fmtMoney = (v) => {
+  if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
+  return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+const fmtInt = (v) => {
+  if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
+  return v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+}
+
+// 指标类型: pct = 百分比; num = 比率/数值; money = 货币金额; int = 计数。
+// 2026-08-18 修复: 此前样本内/样本外列一律按百分比格式化, 导致
+// 总成本显示成 1896365896.36%、Sharpe 显示成 39.75% 一类错误。
+const METRIC_TYPES = {
+  total_return: 'pct', annual_return: 'pct', annual_volatility: 'pct',
+  sharpe: 'num', sortino: 'num', calmar: 'num',
+  max_drawdown: 'pct',
+  benchmark_annual_return: 'pct', benchmark_total_return: 'pct',
+  excess_annual_return_geometric: 'pct', excess_total_return_geometric: 'pct',
+  information_ratio: 'num',
+  win_rate_daily: 'pct', win_rate_monthly: 'pct', win_rate_yearly: 'pct',
+  turnover_annual_oneway: 'pct',
+  total_cost: 'money',
+  cost_erosion_ratio: 'pct',
+  avg_holdings: 'int',
+  avg_top10_concentration: 'pct', avg_cash_ratio: 'pct',
+}
+const fmtMetric = (key, v) => {
+  const type = METRIC_TYPES[key] || 'pct'
+  if (type === 'pct') return fmtPct(v)
+  if (type === 'money') return fmtMoney(v)
+  if (type === 'int') return fmtInt(v)
+  return fmtNum(v)
 }
 
 const TAB_CHARTS = {
@@ -26,6 +61,7 @@ const TAB_CHARTS = {
   style: ['style_timeseries', 'style_heatmap', 'style_summary'],
   costs: ['turnover_costs', 'coverage'],
   constraints: ['constraints', 'drawdown_table'],
+  positions: [],
   report: [],
   artifacts: [],
 }
@@ -35,6 +71,7 @@ export default function Dashboard({ run, activeTab }) {
   const [loading, setLoading] = useState({})
   const [report, setReport] = useState('')
   const [artifacts, setArtifacts] = useState([])
+  const [positions, setPositions] = useState(null)
   const [fullRun, setFullRun] = useState(null)
 
   useEffect(() => {
@@ -65,6 +102,12 @@ export default function Dashboard({ run, activeTab }) {
   useEffect(() => {
     if (!run || activeTab !== 'artifacts') return
     fetchArtifacts(run.id).then(a => setArtifacts(a.filter(x => x.size > 0))).catch(() => setArtifacts([]))
+  }, [run?.id, activeTab])
+
+  useEffect(() => {
+    if (!run || activeTab !== 'positions') return
+    setPositions(null)
+    fetchLatestPositions(run.id, 2).then(setPositions).catch(() => setPositions({ periods: [] }))
   }, [run?.id, activeTab])
 
   if (!run) {
@@ -105,7 +148,7 @@ export default function Dashboard({ run, activeTab }) {
           <>
             <MetricCards summary={run.summary} />
             <div className="chart-grid">
-              <LineChart data={data[`${run.id}-nav`]} title="组合 / 基准 / 超额净值" yLabel="净值" percentAxis />
+              <LineChart data={data[`${run.id}-nav`]} title="组合 / 基准 / 超额收益率" yLabel="累计收益率" percentAxis />
             </div>
             {performance && performance.full_sample && (
               <div className="content-section">
@@ -144,9 +187,9 @@ export default function Dashboard({ run, activeTab }) {
                       ].map(([label, key]) => (
                         <tr key={key}>
                           <td>{label}</td>
-                          <td>{key === 'avg_holdings' || key === 'total_cost' ? fmtNum(performance.full_sample[key]) : fmtPct(performance.full_sample[key])}</td>
-                          {performance.in_sample && <td>{fmtPct(performance.in_sample[key])}</td>}
-                          {performance.out_of_sample && <td>{fmtPct(performance.out_of_sample[key])}</td>}
+                          <td>{fmtMetric(key, performance.full_sample[key])}</td>
+                          {performance.in_sample && <td>{fmtMetric(key, performance.in_sample[key])}</td>}
+                          {performance.out_of_sample && <td>{fmtMetric(key, performance.out_of_sample[key])}</td>}
                         </tr>
                       ))}
                     </tbody>
@@ -301,6 +344,70 @@ export default function Dashboard({ run, activeTab }) {
               </div>
             )}
           </>
+        )
+      case 'positions':
+        return (
+          <div className="content-section">
+            <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>历史持仓 · 最新两期调仓记录</h2>
+              <a
+                className="primary-button"
+                style={{ textDecoration: 'none', padding: '8px 16px' }}
+                href={positionsExportUrl(run.id)}
+                download
+              >
+                ⬇ 下载全部历史 (CSV)
+              </a>
+            </div>
+            {!positions ? (
+              <div className="empty-state">加载中...</div>
+            ) : positions.periods.length === 0 ? (
+              <div className="empty-state">暂无成交记录</div>
+            ) : (
+              positions.periods.map(p => (
+                <div key={p.date} style={{ marginBottom: 24 }}>
+                  <div className="section-heading">
+                    <h3>{p.date} 调仓</h3>
+                    <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+                      买入 {p.n_buy} 笔 / {fmtMoney(p.buy_amount)} · 卖出 {p.n_sell} 笔 / {fmtMoney(p.sell_amount)} · 显式费用 {fmtMoney(p.explicit_cost)}
+                    </span>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>标的</th>
+                          <th>方向</th>
+                          <th>成交股数</th>
+                          <th>成交价</th>
+                          <th>成交金额</th>
+                          <th>佣金</th>
+                          <th>印花税</th>
+                          <th>过户费</th>
+                          <th>费用合计</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {p.records.map((r, i) => (
+                          <tr key={`${r.asset_id}-${i}`}>
+                            <td>{r.asset_id}</td>
+                            <td style={{ color: r.side === 'buy' ? '#ad3e2d' : '#176b4d' }}>{r.side === 'buy' ? '买入' : '卖出'}</td>
+                            <td>{fmtInt(r.filled_quantity)}</td>
+                            <td>{fmtNum(r.fill_price, 4)}</td>
+                            <td>{fmtMoney(r.filled_amount)}</td>
+                            <td>{fmtMoney(r.commission)}</td>
+                            <td>{fmtMoney(r.stamp_duty)}</td>
+                            <td>{fmtMoney(r.transfer_fee)}</td>
+                            <td>{fmtMoney(r.explicit_cost)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         )
       case 'report':
         return (

@@ -16,4 +16,15 @@ export const fetchChartData = (id, chart) => api.get(`/runs/${id}/chart-data/${c
 export const fetchReportMarkdown = (id) => api.get(`/runs/${id}/report.md`).then(r => r.data)
 export const fetchArtifacts = (id) => api.get(`/runs/${id}/artifacts`).then(r => r.data.artifacts)
 
+// 导入因子值 (2026-08-18)
+export const fetchFactorValues = () => api.get('/factor-values').then(r => r.data)
+export const uploadFactorValue = (formData) =>
+  api.post('/factor-values', formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
+export const deleteFactorValue = (factorId) => api.delete(`/factor-values/${factorId}`).then(r => r.data)
+
+// 历史持仓 (2026-08-18)
+export const fetchLatestPositions = (id, periods = 2) =>
+  api.get(`/runs/${id}/positions/latest`, { params: { periods } }).then(r => r.data)
+export const positionsExportUrl = (id) => `/api/runs/${id}/positions/export`
+
 export default api

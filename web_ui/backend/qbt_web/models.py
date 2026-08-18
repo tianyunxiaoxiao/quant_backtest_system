@@ -13,6 +13,14 @@ class FactorInfo(BaseModel):
     description: str
     warmup_days: int
     inputs: list[str]
+    kind: Literal["demo", "values"] = "demo"
+    name: str | None = None
+    n_dates: int | None = None
+    n_assets: int | None = None
+    date_start: str | None = None
+    date_end: str | None = None
+    coverage_ratio: float | None = None
+    source: str | None = None
 
 
 class IndexInfo(BaseModel):
@@ -32,8 +40,14 @@ class RunConfig(BaseModel):
     max_single_weight: float = Field(0.05, ge=0.0, le=1.0)
     slippage_bps: float = Field(12.0, ge=0.0)
     commission_rate: float = Field(0.00025, ge=0.0)
+    stamp_duty_rate: float | None = Field(None, ge=0.0, le=0.01)
+    transfer_fee_rate: float | None = Field(None, ge=0.0, le=0.001)
     fill_price_field: Literal["adj_vwap", "adj_open", "adj_close"] = "adj_vwap"
     lookback: int | None = None
+    # 因子来源: demo = 内置公式因子; values = 外部导入的已计算因子值。
+    factor_source: Literal["demo", "values"] = "demo"
+    # 导入因子值的回测方向 (+1 越大越好 / -1 越小越好), 缺省用导入时声明的方向。
+    factor_direction: Literal[1, -1] | None = None
 
 
 class RunOut(BaseModel):

@@ -16,7 +16,7 @@ export default function LineChart({ data, title, yLabel, height = 360, percentAx
       mode: 'lines',
       name: s.name,
       line: { color: colorPalette[i % colorPalette.length], width: 1.5 },
-      hovertemplate: '%{x|%Y-%m-%d} <br>%{data.name}: %{y:.4f}<extra></extra>',
+      hovertemplate: `%{x|%Y-%m-%d} <br>%{data.name}: ${percentAxis ? '%{y:.2%}' : '%{y:.4f}'}<extra></extra>`,
     }))
 
     const layout = {

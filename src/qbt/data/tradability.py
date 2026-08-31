@@ -6,11 +6,12 @@
 即触及 limit * (1 - buffer_ratio) 就拦单, 比"必须封板"更保守。
 
 停牌 (B6): 零成交量行 + 上市区间内的缺行, 双保险。
-ST 与退市状态无历史数据 (A3), 字段全为 False 并在披露清单中标记。
+ST 状态优先使用仓库逐日快照；缺少交易所涨跌停价时，主板 ST 按 5% 兜底。
 """
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 __all__ = ["price_limit_ratio", "build_limit_matrices", "build_suspension"]
@@ -48,32 +49,42 @@ def price_limit_ratio(asset_id: str, day: pd.Timestamp, *, listed_first: pd.Time
 
 
 def _limit_ratio_matrix(
-    assets: pd.Index, dates: pd.DatetimeIndex, listed_first: pd.Series
+    assets: pd.Index,
+    dates: pd.DatetimeIndex,
+    listed_first: pd.Series,
+    is_st: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """逐资产 x 日期的限幅矩阵。板块固定, 只有创业板与新股窗口随日期变化。"""
-    out = pd.DataFrame(0.10, index=dates, columns=assets, dtype="float32")
+    boards = np.asarray([_board(str(asset)) for asset in assets], dtype=object)
+    values = np.full((len(dates), len(assets)), 0.10, dtype="float32")
     chinext_switch = pd.Timestamp("2020-08-24")
-    for asset in assets:
-        board = _board(asset)
-        if board == "bse":
-            col = pd.Series(0.30, index=dates, dtype="float64")
-        elif board == "star":
-            col = pd.Series(0.20, index=dates, dtype="float64")
-        elif board == "chinext":
-            col = pd.Series(0.10, index=dates, dtype="float64")
-            col[dates >= chinext_switch] = 0.20
-        else:
-            col = pd.Series(0.10, index=dates, dtype="float64")
-        first = listed_first.get(asset, pd.NaT)
-        if pd.notna(first) and dates[0] <= pd.Timestamp(first) <= dates[-1]:
-            first_pos = int(dates.searchsorted(pd.Timestamp(first), side="left"))
-            if board in ("star", "chinext"):
-                # 上市后的前 5 个实际交易日不设涨跌幅限制。
-                col.iloc[first_pos:min(first_pos + 5, len(col))] = float("nan")
-            elif first_pos < len(col):
-                col.iloc[first_pos] = float("nan")
-        out[asset] = col.astype("float32")
-    return out
+    values[:, boards == "bse"] = 0.30
+    values[:, boards == "star"] = 0.20
+    chinext = boards == "chinext"
+    values[np.ix_(dates >= chinext_switch, chinext)] = 0.20
+
+    main = boards == "main"
+    if is_st is not None and main.any():
+        st_values = (
+            is_st.reindex(index=dates, columns=assets)
+            .fillna(False)
+            .to_numpy(dtype=bool)
+        )
+        values[:, main] = np.where(st_values[:, main], 0.05, 0.10)
+
+    first = pd.to_datetime(listed_first.reindex(assets)).to_numpy(dtype="datetime64[ns]")
+    date_values = dates.to_numpy(dtype="datetime64[ns]")
+    in_window = (~np.isnat(first)) & (first >= date_values[0]) & (first <= date_values[-1])
+    first_pos = np.searchsorted(date_values, first, side="left")
+    extended = in_window & np.isin(boards, ("star", "chinext"))
+    extended_cols = np.flatnonzero(extended)
+    for offset in range(5):
+        rows = first_pos[extended_cols] + offset
+        valid = rows < len(dates)
+        values[rows[valid], extended_cols[valid]] = np.nan
+    first_day_cols = np.flatnonzero(in_window & ~np.isin(boards, ("star", "chinext")))
+    values[first_pos[first_day_cols], first_day_cols] = np.nan
+    return pd.DataFrame(values, index=dates, columns=assets)
 
 
 def build_limit_matrices(
@@ -84,6 +95,9 @@ def build_limit_matrices(
     listed_first: pd.Series,
     *,
     raw_fill_price: pd.DataFrame | None = None,
+    raw_limit_up: pd.DataFrame | None = None,
+    raw_limit_down: pd.DataFrame | None = None,
+    is_st: pd.DataFrame | None = None,
     buffer_ratio: float = 0.005,
 ) -> dict[str, pd.DataFrame]:
     """推导涨跌停不可交易矩阵。
@@ -98,13 +112,27 @@ def build_limit_matrices(
     卖出侧对称；开盘价敏感性配置下第一条即"开盘封板不可买"。
     """
     dates, assets = raw_prev_close.index, raw_prev_close.columns
-    ratio = _limit_ratio_matrix(assets, dates, listed_first)
+    ratio = _limit_ratio_matrix(assets, dates, listed_first, is_st=is_st)
     prev = raw_prev_close.astype("float64")
 
     up_price = (prev * (1.0 + ratio)).round(2)
     down_price = (prev * (1.0 - ratio)).round(2)
-    buy_block_price = (prev * (1.0 + ratio - buffer_ratio)).round(4)
-    sell_block_price = (prev * (1.0 - ratio + buffer_ratio)).round(4)
+    if raw_limit_up is not None and raw_limit_down is not None:
+        actual_up = raw_limit_up.astype("float64")
+        actual_down = raw_limit_down.astype("float64")
+        actual_valid = (
+            actual_up.notna()
+            & actual_down.notna()
+            & (actual_up > 0)
+            & (actual_down > 0)
+        )
+        up_price = actual_up.where(actual_valid, up_price)
+        down_price = actual_down.where(actual_valid, down_price)
+        ratio = (up_price / prev.replace(0.0, float("nan")) - 1.0).where(
+            actual_valid, ratio
+        )
+    buy_block_price = (up_price - prev * buffer_ratio).round(4)
+    sell_block_price = (down_price + prev * buffer_ratio).round(4)
 
     lo = raw_low.astype("float64")
     hi = raw_high.astype("float64")
@@ -144,8 +172,7 @@ def build_suspension(
     is_listed = pd.DataFrame(
         (date_arr[:, None] >= first[None, :]), index=dates, columns=volume.columns
     ).fillna(False)
-    # 数据集内所有股票都活到样本末端 (审计发现 2), 退市矩阵在样本末端之前恒为 False;
-    # 这里仍按"最后一条行情之后视为退市"实现, 供未来补数据后自动生效。
+    # de_listed_date 是最后上市日期；从下一交易日起进入退市状态。
     is_delisted = pd.DataFrame(
         (date_arr[:, None] > last[None, :]), index=dates, columns=volume.columns
     ).fillna(False)

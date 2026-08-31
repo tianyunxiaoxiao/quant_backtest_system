@@ -1,0 +1,25 @@
+{
+  "schema_version": "qpf_qbt_unified_dataset/v1",
+  "version": "rqdata-a-share-20260825-v1",
+  "date_min": "2019-01-02",
+  "date_max": "2026-08-25",
+  "factor_snapshot": {
+    "path": "panel_shards",
+    "field_count": 25,
+    "asset_count": 5448,
+    "trading_days": 1855,
+    "content_hash": "sha256:5a021c8959befd385c51757a348b29883a882a74a07c090d960aedb73d64b86c"
+  },
+  "backtest_warehouse": {
+    "path": "warehouse_rqdata",
+    "field_count": 31,
+    "row_count": 8748503,
+    "content_hash": "sha256:8f169244148f71323f83d66362fe7661ad451210cd8d14a2cb40b0d2e715b1ea",
+    "source_snapshot_hash": "sha256:5a021c8959befd385c51757a348b29883a882a74a07c090d960aedb73d64b86c"
+  },
+  "benchmarks": [
+    "000300.SH",
+    "000905.SH",
+    "000852.SH"
+  ]
+}

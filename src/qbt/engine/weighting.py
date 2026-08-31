@@ -94,6 +94,11 @@ def build_target_weights(
     sel = selected.to_numpy(dtype=bool)
     rk = rank.reindex(index=dates, columns=assets).to_numpy(dtype="float64")
     budget = 1.0 - cash_buffer
+    iw_values = (
+        index_weights.reindex(index=dates, columns=assets).to_numpy(dtype="float64")
+        if method == "index_weight" and index_weights is not None
+        else None
+    )
 
     out = np.zeros_like(sc)
     rows = []
@@ -118,9 +123,9 @@ def build_target_weights(
             cutoff = lo - (abs(span) * 1e-6 if span > 0 else max(abs(lo), 1.0) * 1e-6)
 
         if method == "index_weight":
-            if index_weights is None:
+            if iw_values is None:
                 raise ValueError("index_weight 方法需要 index_weights")
-            iw = index_weights.reindex(index=dates, columns=assets).iloc[i, sel_i]
+            iw = iw_values[i, sel_i]
             strength = np.where(np.isfinite(iw) & (iw > 0), iw, 0.0)
             used_eq = False
             if strength.sum() <= _EPS:
@@ -164,6 +169,10 @@ def build_target_weights(
         )
 
     return WeightingResult(
-        target_weights=pd.DataFrame(out, index=dates, columns=assets),
+        target_weights=pd.DataFrame(
+            out,
+            index=dates.copy().rename("date"),
+            columns=assets.copy().rename("asset_id"),
+        ),
         diagnostics=pd.DataFrame(rows).set_index("date"),
     )

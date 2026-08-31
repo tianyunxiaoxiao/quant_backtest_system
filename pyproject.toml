@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "qbt"
 version = "1.0.0"
 description = "指数内多头因子回测框架 (Quant Backtest Toolkit)"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "numpy==2.5.1",
     "pandas==3.0.5",

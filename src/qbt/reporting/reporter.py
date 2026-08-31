@@ -29,7 +29,6 @@ from .artifacts import (
     verify_backtest_artifact_roundtrip,
     write_backtest_artifacts,
 )
-from .charts import ChartBuilder
 from .md_builder import MarkdownReportBuilder
 
 __all__ = ["LongOnlyFactorReporter"]
@@ -63,7 +62,8 @@ class LongOnlyFactorReporter:
             self._verify_staged_inventory(stage_dir, output_dir, rendered.all_artifacts)
             backup_dir = self._publish(stage_dir, output_dir)
             try:
-                verify_backtest_artifact_roundtrip(result, output_dir)
+                if config.verify_roundtrip:
+                    verify_backtest_artifact_roundtrip(result, output_dir)
             except Exception:
                 failed_dir = output_dir.parent / f".{output_dir.name}.failed-{uuid.uuid4().hex}"
                 output_dir.rename(failed_dir)
@@ -92,19 +92,22 @@ class LongOnlyFactorReporter:
         )
 
         # 2. 生成图表
-        chart_builder = ChartBuilder(
-            width=config.figure_width,
-            height=config.figure_height,
-            dpi=config.chart_dpi,
-            format=config.chart_format,
-        )
-        chart_result = chart_builder.build(result)
         chart_artifacts: list[RunArtifact] = []
-        writer = _ChartWriter(
-            stage_dir, dpi=config.chart_dpi, fmt=config.chart_format, uri_root=output_dir
-        )
-        for name, fig in chart_result.figures.items():
-            chart_artifacts.append(writer.write(fig, name))
+        if config.write_charts:
+            from .charts import ChartBuilder
+
+            chart_builder = ChartBuilder(
+                width=config.figure_width,
+                height=config.figure_height,
+                dpi=config.chart_dpi,
+                format=config.chart_format,
+            )
+            chart_result = chart_builder.build(result)
+            writer = _ChartWriter(
+                stage_dir, dpi=config.chart_dpi, fmt=config.chart_format, uri_root=output_dir
+            )
+            for name, fig in chart_result.figures.items():
+                chart_artifacts.append(writer.write(fig, name))
 
         # 3. 生成 Markdown
         md_artifacts: list[RunArtifact] = []

@@ -65,6 +65,25 @@ def test_compute_performance_stats():
     assert np.isfinite(stats.sharpe)
 
 
+def test_period_win_rate_compounds_portfolio_and_benchmark_separately():
+    idx = pd.DatetimeIndex(["2020-01-02", "2020-01-03"])
+    net = pd.Series([-0.8, -0.1], index=idx)
+    benchmark = pd.Series([-0.3, -0.8], index=idx)
+    frame = pd.DataFrame(
+        {
+            "portfolio_net_return": net,
+            "portfolio_gross_return": net,
+            "benchmark_return": benchmark,
+            "excess_return": net - benchmark,
+            "trade_cost": 0.0,
+        }
+    )
+    stats = compute_performance_stats(frame, label="period-win")
+    # 组合月收益 -82%，基准 -86%，几何相对收益为正；逐日算术超额复利会误判。
+    assert stats.win_rate_monthly == 1.0
+    assert stats.win_rate_yearly == 1.0
+
+
 def test_performance_excess_drawdown_uses_nav_ratio():
     idx = pd.date_range("2020-01-02", periods=4, freq="B")
     net = pd.Series([0.0, 0.10, -0.05, 0.02], index=idx)

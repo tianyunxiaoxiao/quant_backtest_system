@@ -1,0 +1,11 @@
+.git
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+data
+warehouse*
+web_ui/data
+web_ui/frontend/node_modules
+web_ui/frontend/dist
+web_ui/backend/.pytest_cache

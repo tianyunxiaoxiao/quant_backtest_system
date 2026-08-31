@@ -137,6 +137,21 @@ cd quant_backtest_web
 | `OUTPUT_ROOT`        | 产物输出目录                              |
 | `DATABASE_PATH`      | SQLite 数据库路径                         |
 | `CORS_ORIGINS`       | 跨域来源，如 `["*"]`                      |
+| `QBT_AUTH_REQUIRED` | 是否强制使用因子研究平台统一认证，生产环境必须为 `true` |
+| `QBT_SECURE_COOKIES` | 是否仅通过 HTTPS 发送回测会话 Cookie，生产环境必须为 `true` |
+| `FACTOR_PLATFORM_URL` | 因子研究Web服务内部地址，用于按用户Session过滤可见因子 |
+| `FACTOR_TASK_API_URL` | 因子平台任务API内部地址，用于服务间读取因子值 |
+| `FACTOR_TASK_API_KEY_ID` | 回测服务的HMAC Key ID |
+| `FACTOR_TASK_API_SECRET` | 回测服务的HMAC Secret（仅服务端注入） |
+
+## 统一登录与权限
+
+- 因子研究平台是唯一账号源，回测平台不保存第二份用户名或密码。
+- 回测登录接口把凭据转发给因子平台验证，并在回测域名签发 HttpOnly 会话 Cookie。
+- 账号角色、停用状态和 12 小时会话有效期均由因子平台控制。
+- 所有写接口要求中央会话中的 CSRF Token。
+- 普通研究员只能访问自己的回测、上传因子和产物；管理员可查看全部记录。
+- 旧版无所有者记录在迁移后仅管理员可见，不会自动归属给任意研究员。
 
 ## 部署到 Render（示例）
 

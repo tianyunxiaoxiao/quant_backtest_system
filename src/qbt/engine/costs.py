@@ -22,7 +22,7 @@ from ..contracts.config import CostConfig, CostRate
 __all__ = ["CostModel", "FillCosts"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FillCosts:
     commission: float
     stamp_duty: float

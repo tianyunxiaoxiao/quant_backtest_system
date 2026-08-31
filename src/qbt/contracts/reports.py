@@ -178,3 +178,5 @@ class LongOnlyFactorBacktestResult:
     benchmark_drawdown: pd.Series = field(default_factory=pd.Series)
     excess_drawdown: pd.Series = field(default_factory=pd.Series)
     position_period_analysis: pd.DataFrame = field(default_factory=pd.DataFrame)
+    orders_frame: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    fills_frame: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)

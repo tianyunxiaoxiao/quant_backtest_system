@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 ALL_A_INDEX_ID = "ALL_A_EQ"
-ALL_A_INDEX_NAME = "全A等权"
+ALL_A_INDEX_NAME = "流动性过滤后的非 ST A 股"
 DEFAULT_INDEX_ID = ALL_A_INDEX_ID
 
 __all__ = [

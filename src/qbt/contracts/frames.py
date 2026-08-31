@@ -57,7 +57,10 @@ class FactorFrame:
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "values", _check_matrix("FactorFrame.values", self.values))
+        values = _check_matrix("FactorFrame.values", self.values).copy(deep=False)
+        values.index = values.index.copy().rename("date")
+        values.columns = values.columns.copy().rename("asset_id")
+        object.__setattr__(self, "values", values)
         if self.direction not in (1, -1):
             raise ValueError("direction 必须是 +1 或 -1")
         if not self.factor_id:

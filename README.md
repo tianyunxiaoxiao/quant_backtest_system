@@ -10,7 +10,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# 跑完整回测 (省略 --index 时默认 ALL_A_EQ 全A等权)
+# 跑完整回测 (省略 --index 时默认 ALL_A_EQ 流动性过滤后的非 ST A 股)
 PYTHONPATH=src python -m qbt.cli.main --factor reversal_20d
 
 # 指定窗口和调仓频率
@@ -56,6 +56,25 @@ cfg = IngestConfig(
 ingest_prices(cfg)
 ```
 
+### 从因子平台米筐快照构建同源仓库
+
+组合回测可直接从因子研究平台的不可变 `panel_shards` 快照构建仓库，统一日期、
+后复权价格、股票列表、历史 ST、涨跌停价和研究资格口径：
+
+```bash
+PYTHONPATH=src python scripts/ingest_rq_snapshot.py \
+  --snapshot /path/to/panel_shards \
+  --output warehouse_rqdata
+```
+
+构建结果写入 `rqdata_warehouse_manifest.json`，记录 RQData 供应商版本、源快照哈希、
+年度分区哈希和资格规则。默认拒绝覆盖已有仓库；确认重建时显式增加 `--overwrite`。
+本地 Web 服务通过 `.env` 中的 `QBT_WAREHOUSE` 切换仓库。
+
+该仓库的交易日历、资产主表、研究股票池、行情、复权因子、ST 与涨跌停均从同一
+米筐快照派生。快照未包含历史指数成分时，网页只开放 `ALL_A_EQ`，且后端会拒绝
+沪深300、中证500、中证1000请求，不会回退读取旧 Excel 或其他仓库。
+
 ## 精简交付
 
 本目录是可独立运行的精简交付副本。开发期虚拟环境、Git 历史、测试源码、缓存、
@@ -70,8 +89,8 @@ ingest_prices(cfg)
 - 未成交订单当日收盘取消
 - 涨跌停: 距涨停/跌停 0.5 个百分点即视为不可交易
 - 停牌: 零成交量行 + 上市区间内缺行
-- 成本: 佣金双边万 2.5, 印花税卖方单边 (2008-09-19 后 0.1%, 2023-08-28 后 0.05%), 过户费双边
-- 基准: 指定指数时由 PIT 指数月度权重合成; 省略指数时使用每日再平衡的全A等权 (`ALL_A_EQ`), 复权价空间
+- 成本: 佣金双边万 2.5、每笔最低 5 元, 印花税卖方单边 (2008-09-19 后 0.1%, 2023-08-28 后 0.05%), 过户费双边
+- 基准: 指定指数时由 PIT 指数月度权重合成; 省略指数时使用每日再平衡的“流动性过滤后的非 ST A 股” (`ALL_A_EQ`), 复权价空间
 - 风格: Size/Value/Momentum/Volatility/Liquidity 代理, Growth/Quality/Leverage 标记缺失
 
 ## 产物目录

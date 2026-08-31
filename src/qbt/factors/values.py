@@ -31,6 +31,7 @@ from ..data.hashing import hash_frame
 __all__ = [
     "FactorValuesStats",
     "inspect_factor_values",
+    "load_target_weights",
     "load_factor_values",
 ]
 
@@ -107,6 +108,10 @@ def _coerce_wide_matrix(raw: pd.DataFrame, *, source: str) -> pd.DataFrame:
     values.index = pd.DatetimeIndex(index).normalize()
     values.columns = columns
     values = values.sort_index(axis=0).sort_index(axis=1)
+    # FactorFrame 使用固定轴名称；先完成规范化再计算内容哈希，避免构造前后
+    # 仅轴名称变化却被误判为因子值遭到篡改。
+    values.index = values.index.copy().rename("date")
+    values.columns = values.columns.copy().rename("asset_id")
     values = values.astype("float64")
     # Inf 统一转 NaN (float64 原生缺失), 与演示因子口径一致
     values = values.where(np.isfinite(values))
@@ -183,6 +188,62 @@ def load_factor_values(
         direction=direction,
         description=description or f"外部导入因子值 {factor_id}",
         missing_policy="exclude_from_eligible",
+        data_version=data_version,
+        content_hash=hash_frame(values),
+        code_version=code_version,
+        metadata=meta,
+    )
+
+
+def load_target_weights(
+    source: Path | str | pd.DataFrame,
+    *,
+    portfolio_id: str,
+    description: str = "",
+    data_version: str = "unversioned",
+    code_version: str = "unversioned",
+    metadata: Mapping[str, Any] | None = None,
+) -> FactorFrame:
+    """Load an exact long-only target-weight schedule.
+
+    Each row is one signal date. NaN means zero target weight, row sums below one
+    leave cash, and no ranking or normalization is applied downstream.
+    """
+    raw, label = _read_source(source)
+    numeric = raw.apply(pd.to_numeric, errors="coerce")
+    if np.isinf(numeric.to_numpy(dtype="float64")).any():
+        raise ValueError(f"{label}: 目标权重不能包含 Inf")
+    values = _coerce_wide_matrix(raw, source=label).fillna(0.0)
+    if (values.to_numpy() < 0.0).any():
+        row, col = np.argwhere(values.to_numpy() < 0.0)[0]
+        raise ValueError(
+            f"{label}: 目标权重不能为负: {values.index[row].date()} {values.columns[col]}"
+        )
+    row_sums = values.sum(axis=1)
+    overflow = row_sums > 1.0 + 1e-8
+    if overflow.any():
+        day = row_sums.index[overflow][0]
+        raise ValueError(f"{label}: {day.date()} 权重和 {row_sums.loc[day]:.8f} 超过 1")
+    values = values.mask(values.abs() < 1e-15, 0.0)
+    meta = {
+        "source_path": label if not isinstance(source, pd.DataFrame) else "<in-memory>",
+        "n_dates": int(values.shape[0]),
+        "n_assets": int(values.shape[1]),
+        "date_start": str(values.index[0].date()),
+        "date_end": str(values.index[-1].date()),
+        "coverage_ratio": round(float((values > 0).to_numpy().mean()), 6),
+        "value_type": "target_weights",
+        "weight_semantics": "exact_long_only_targets; nan_is_zero; residual_is_cash",
+        "source": "imported target weights (pre-computed externally)",
+    }
+    if metadata:
+        meta.update(dict(metadata))
+    return FactorFrame(
+        values=values,
+        factor_id=str(portfolio_id).strip(),
+        direction=1,
+        description=description or f"直接目标权重 {portfolio_id}",
+        missing_policy="nan_is_zero_target",
         data_version=data_version,
         content_hash=hash_frame(values),
         code_version=code_version,

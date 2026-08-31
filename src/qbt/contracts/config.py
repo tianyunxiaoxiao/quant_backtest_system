@@ -1,6 +1,6 @@
 """请求与配置契约 (规范 6 / 17-P0)。
 
-研究员入口只需 factor + 可选 index_id; 省略指数时使用全A等权基准,
+研究员入口只需 factor + 可选 index_id; 省略指数时使用流动性过滤后的非 ST A 股基准,
 但完整解析后的配置必须写入运行记录 (规范 6 末段)。
 """
 
@@ -151,7 +151,8 @@ class CostConfig:
     """
 
     commission_rate: float = 0.00025
-    min_commission: float = 0.0
+    # A 股普通券商账户通常按每笔最低 5 元收取佣金；可显式设为 0 关闭。
+    min_commission: float = 5.0
     transfer_fee_schedule: tuple[CostRate, ...] = (
         CostRate(date(1900, 1, 1), 0.00002),
         CostRate(date(2022, 4, 29), 0.00001),
@@ -212,6 +213,8 @@ class ExecutionConfig:
     limit_touch_buffer: float = 0.005   # 距涨跌停 0.5 个百分点即视为不可交易 (B5)
     split_large_orders: bool = False
     max_split_days: int = 1
+    # 退市后无法继续按行情估值；默认按零回收保守核销，可用于敏感性分析。
+    delisting_recovery_rate: float = 0.0
 
     def __post_init__(self) -> None:
         if self.fill_price_field not in ("adj_open", "adj_vwap", "adj_close"):
@@ -234,6 +237,10 @@ class ExecutionConfig:
             raise ValueError("v1 只支持 sell_proceeds_available_same_day=True")
         if self.split_large_orders:
             raise ValueError("v1 未支持跨日拆单; 未成交订单收盘取消")
+        if not 0.0 <= _finite(
+            "delisting_recovery_rate", self.delisting_recovery_rate
+        ) <= 1.0:
+            raise ValueError("delisting_recovery_rate 必须落在 [0, 1]")
 
 
 @dataclass(frozen=True)
@@ -328,7 +335,7 @@ class LongOnlyFactorBacktestConfig:
 
 @dataclass(frozen=True)
 class LongOnlyFactorBacktestRequest:
-    """研究请求; omitted ``index_id`` resolves to ``ALL_A_EQ`` (全A等权)."""
+    """研究请求; omitted ``index_id`` resolves to ``ALL_A_EQ`` research universe."""
 
     factor: FactorFrame
     index_id: str | None = None
@@ -340,7 +347,7 @@ class LongOnlyFactorBacktestRequest:
         if self.index_id is None:
             object.__setattr__(self, "index_id", "ALL_A_EQ")
         elif not isinstance(self.index_id, str) or not self.index_id.strip():
-            raise ValueError("index_id 必须是非空字符串, 或省略以使用全A等权")
+            raise ValueError("index_id 必须是非空字符串, 或省略以使用默认研究股票池")
         else:
             object.__setattr__(self, "index_id", self.index_id.strip())
 
@@ -357,6 +364,8 @@ class PortfolioReportConfig:
     max_table_rows: int = 40
     write_markdown: bool = True
     write_json: bool = True
+    write_charts: bool = True
+    verify_roundtrip: bool = True
     fail_on_missing_section: bool = True
 
     def __post_init__(self) -> None:

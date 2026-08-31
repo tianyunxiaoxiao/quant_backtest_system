@@ -116,8 +116,10 @@ def write_backtest_artifacts(
     writer.write_dataframe(result.selected_members, "selected_members")
     writer.write_dataframe(result.target_weights, "target_weights")
     writer.write_dataframe(result.actual_weights, "actual_weights")
-    writer.write_dataframe(orders_to_frame(result.orders), "orders", index=False)
-    writer.write_dataframe(fills_to_frame(result.fills), "fills", index=False)
+    orders_frame = result.orders_frame if not result.orders_frame.empty else orders_to_frame(result.orders)
+    fills_frame = result.fills_frame if not result.fills_frame.empty else fills_to_frame(result.fills)
+    writer.write_dataframe(orders_frame, "orders", index=False)
+    writer.write_dataframe(fills_frame, "fills", index=False)
     writer.write_dataframe(result.holdings, "holdings")
     writer.write_dataframe(result.cash_ledger, "cash_ledger")
 
@@ -136,6 +138,27 @@ def write_backtest_artifacts(
             "excess_drawdown": result.excess_drawdown,
         }
     )
+    # Keep benchmark-independent portfolio diagnostics beside the return series.
+    # The web UI can then rebase a completed run without losing turnover, costs,
+    # holdings, concentration, or cash metrics.
+    ledger_columns = (
+        "trade_cost",
+        "cash_ratio",
+        "n_holdings",
+        "is_rebalance",
+        "turnover",
+        "sell_amount",
+        "buy_amount",
+    )
+    for column in ledger_columns:
+        if column in result.cash_ledger.columns:
+            daily_returns[column] = result.cash_ledger[column].reindex(daily_returns.index)
+
+    weights = result.actual_weights.reindex(index=daily_returns.index).fillna(0.0)
+    weight_values = weights.to_numpy(dtype="float64")
+    sorted_weights = np.sort(weight_values, axis=1)[:, ::-1]
+    daily_returns["top10_concentration"] = sorted_weights[:, :10].sum(axis=1)
+    daily_returns["hhi"] = np.square(weight_values).sum(axis=1)
     writer.write_dataframe(daily_returns, "daily_returns")
     writer.write_dataframe(result.costs, "costs")
     style_exposures = pd.concat(
@@ -224,8 +247,10 @@ def verify_backtest_artifact_roundtrip(
     frame("selected_members", result.selected_members)
     frame("target_weights", result.target_weights)
     frame("actual_weights", result.actual_weights)
-    frame("orders", orders_to_frame(result.orders))
-    frame("fills", fills_to_frame(result.fills))
+    expected_orders = result.orders_frame if not result.orders_frame.empty else orders_to_frame(result.orders)
+    expected_fills = result.fills_frame if not result.fills_frame.empty else fills_to_frame(result.fills)
+    frame("orders", expected_orders)
+    frame("fills", expected_fills)
     frame("holdings", result.holdings)
     frame("cash_ledger", result.cash_ledger)
     frame(
@@ -539,6 +564,8 @@ def load_backtest_artifacts(output_dir: Path) -> LongOnlyFactorBacktestResult:
         position_period_analysis=pd.read_parquet(
             safe_artifact_path(root, "position_period_analysis", "parquet")
         ),
+        orders_frame=order_frame,
+        fills_frame=fill_frame,
     )
 
 

@@ -1,4 +1,5 @@
 """Pydantic request/response models."""
+
 from __future__ import annotations
 
 from datetime import date
@@ -13,7 +14,7 @@ class FactorInfo(BaseModel):
     description: str
     warmup_days: int
     inputs: list[str]
-    kind: Literal["demo", "values"] = "demo"
+    kind: Literal["demo", "values", "platform"] = "demo"
     name: str | None = None
     n_dates: int | None = None
     n_assets: int | None = None
@@ -21,6 +22,9 @@ class FactorInfo(BaseModel):
     date_end: str | None = None
     coverage_ratio: float | None = None
     source: str | None = None
+    factor_version_id: str | None = None
+    content_hash: str | None = None
+    value_type: Literal["factor_scores", "target_weights"] = "factor_scores"
 
 
 class IndexInfo(BaseModel):
@@ -40,20 +44,26 @@ class RunConfig(BaseModel):
     max_single_weight: float = Field(0.05, ge=0.0, le=1.0)
     slippage_bps: float = Field(12.0, ge=0.0)
     commission_rate: float = Field(0.00025, ge=0.0)
+    min_commission: float = Field(5.0, ge=0.0)
     stamp_duty_rate: float | None = Field(None, ge=0.0, le=0.01)
     transfer_fee_rate: float | None = Field(None, ge=0.0, le=0.001)
     fill_price_field: Literal["adj_vwap", "adj_open", "adj_close"] = "adj_vwap"
     lookback: int | None = None
     # 因子来源: demo = 内置公式因子; values = 外部导入的已计算因子值。
-    factor_source: Literal["demo", "values"] = "demo"
+    factor_source: Literal["demo", "values", "platform"] = "demo"
     # 导入因子值的回测方向 (+1 越大越好 / -1 越小越好), 缺省用导入时声明的方向。
     factor_direction: Literal[1, -1] | None = None
+    factor_version_id: str | None = None
+    portfolio_input_mode: Literal["factor_scores", "direct_target_weights"] = "factor_scores"
 
 
 class RunOut(BaseModel):
     id: str
+    owner_user_id: int | None = None
+    owner_username: str | None = None
     status: str
     factor_id: str
+    factor_name: str | None = None
     index_id: str
     start_date: str | None
     end_date: str | None
@@ -66,7 +76,11 @@ class RunOut(BaseModel):
     summary: dict[str, Any] | None
     error: str | None
     created_at: str | None
+    started_at: str | None
+    cancelled_at: str | None
     completed_at: str | None
+    elapsed_seconds: float
+    queue_seconds: float | None
 
 
 class RunList(BaseModel):

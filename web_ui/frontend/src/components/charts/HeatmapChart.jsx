@@ -12,7 +12,7 @@ export default function HeatmapChart({ data, title, height = 360 }) {
       type: 'heatmap',
       colorscale: 'RdYlGn',
       reversescale: true,
-      hovertemplate: '%{y} / %{x}: %{z:.3f}<extra></extra>',
+      hovertemplate: '%{y} / %{x}: %{z:.2f}<extra></extra>',
     }
 
     const layout = {

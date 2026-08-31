@@ -28,7 +28,7 @@ from .benchmark import (
     build_equal_weight_all_a_returns,
     load_official_benchmark,
 )
-from .hashing import hash_file, hash_frame, hash_json, hash_series
+from .hashing import hash_file, hash_files_cached, hash_frame, hash_json, hash_series
 from .ingest_index import (
     ALL_A_INDEX_ID,
     ALL_A_INDEX_NAME,
@@ -36,7 +36,7 @@ from .ingest_index import (
     expand_monthly_to_daily,
     ingest_index_membership,
 )
-from .panel import build_trading_calendar, load_price_panel
+from .panel import PricePanel, build_trading_calendar, load_price_panel
 from .style import MISSING_STYLES, build_style_exposures
 from .tradability import build_limit_matrices, build_suspension
 
@@ -83,27 +83,52 @@ class PortfolioDataPortal:
         self.config = config
         self._calendar: pd.DatetimeIndex | None = None
 
+    def _rq_warehouse_manifest(self) -> dict[str, object] | None:
+        path = Path(self.config.warehouse_dir) / "rqdata_warehouse_manifest.json"
+        if not path.is_file():
+            return None
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"米筐仓库清单无法读取: {path}") from exc
+        if manifest.get("schema_version") != "qbt_rqdata_warehouse/v1":
+            raise ValueError(f"不支持的米筐仓库清单版本: {manifest.get('schema_version')}")
+        return manifest
+
     # ---------- 公共入口 ----------
 
     def trading_calendar(self) -> pd.DatetimeIndex:
         if self._calendar is None:
             cache = Path(self.config.warehouse_dir) / "trading_calendar.parquet"
             cache_meta = cache.with_suffix(".meta.json")
-            source_signature = self._calendar_source_signature()
+            rq_manifest = self._rq_warehouse_manifest()
+            source_signature = (
+                None if rq_manifest is not None else self._calendar_source_signature()
+            )
             valid_cache = False
             if cache.exists() and cache_meta.exists():
                 try:
                     meta = json.loads(cache_meta.read_text(encoding="utf-8"))
                     cached = pd.read_parquet(cache)
+                    rq_snapshot_calendar = (
+                        rq_manifest is not None
+                        and meta.get("schema_version") == 2
+                        and meta.get("source") == "rqdata_snapshot_metadata.dates"
+                        and meta.get("source_content_hash")
+                        == rq_manifest.get("source", {}).get("content_hash")
+                    )
+                    legacy_calendar = (
+                        meta.get("schema_version") == 1
+                        and meta.get("calendar_min_active") == self.config.calendar_min_active
+                        and meta.get("source_signature") == source_signature
+                    )
                     valid_cache = (
                         list(cached.columns) == ["date"]
                         and pd.api.types.is_datetime64_any_dtype(cached["date"])
                         and cached["date"].notna().all()
                         and cached["date"].is_monotonic_increasing
                         and not cached["date"].duplicated().any()
-                        and meta.get("schema_version") == 1
-                        and meta.get("calendar_min_active") == self.config.calendar_min_active
-                        and meta.get("source_signature") == source_signature
+                        and (rq_snapshot_calendar or legacy_calendar)
                         and meta.get("cache_hash") == hash_file(cache)
                     )
                     if valid_cache:
@@ -152,12 +177,29 @@ class PortfolioDataPortal:
         return hash_json(partitions)
 
     def resolve(
-        self, factor: FactorFrame, index_id: str | None, config: LongOnlyFactorBacktestConfig
+        self,
+        factor: FactorFrame,
+        index_id: str | None,
+        config: LongOnlyFactorBacktestConfig,
+        *,
+        preloaded_panel: PricePanel | None = None,
     ) -> ResolvedLongOnlyBacktestData:
         index_id = ALL_A_INDEX_ID if index_id is None else str(index_id).strip()
         if not index_id:
             index_id = ALL_A_INDEX_ID
         is_all_a = index_id == ALL_A_INDEX_ID
+        rq_manifest = self._rq_warehouse_manifest()
+        if rq_manifest is not None:
+            supported = {
+                str(item["index_id"])
+                for item in rq_manifest.get("supported_indexes", [])
+                if isinstance(item, dict) and item.get("index_id")
+            }
+            if index_id not in supported:
+                raise ValueError(
+                    f"米筐快照仓库不包含 {index_id} 的历史成分，禁止回退使用其他数据源; "
+                    f"当前可用指数: {sorted(supported)}"
+                )
         if not is_all_a and index_id not in INDEX_SPECS:
             raise KeyError(
                 f"未知 index_id: {index_id}; 已支持 {[ALL_A_INDEX_ID, *sorted(INDEX_SPECS)]}"
@@ -169,9 +211,7 @@ class PortfolioDataPortal:
         monthly: pd.DataFrame | None = None
         if not is_all_a:
             spec = INDEX_SPECS[index_id]
-            monthly, index_stats = ingest_index_membership(
-                Path(self.config.index_source_dir), spec
-            )
+            monthly, index_stats = ingest_index_membership(Path(self.config.index_source_dir), spec)
             dataset_refs.append(
                 DatasetRef(
                     name=f"index_membership:{index_id}",
@@ -188,44 +228,79 @@ class PortfolioDataPortal:
 
         calendar = self.trading_calendar()
         start, end, warmup_start = self._resolve_window(factor, config, calendar, monthly)
-        if not is_all_a and config.start_date is not None and start > pd.Timestamp(config.start_date):
+        if (
+            not is_all_a
+            and config.start_date is not None
+            and start > pd.Timestamp(config.start_date)
+        ):
             warnings_list.append(
                 f"请求开始日 {config.start_date} 早于首个可用 PIT 成分生效日; "
                 f"有效回测从 {start.date()} 开始, 未做历史回填"
             )
         universe_assets = (
-            self._discover_all_a_assets(factor)
+            list(map(str, preloaded_panel.assets))
+            if is_all_a and preloaded_panel is not None
+            else self._discover_all_a_assets(factor)
             if is_all_a
-            else sorted(monthly["asset_id"].unique()) if monthly is not None else []
+            else sorted(monthly["asset_id"].unique())
+            if monthly is not None
+            else []
         )
 
-        panel = load_price_panel(
-            Path(self.config.warehouse_dir),
-            universe_assets,
-            warmup_start,
-            end,
-            trading_days=calendar,
+        if preloaded_panel is None:
+            panel = load_price_panel(
+                Path(self.config.warehouse_dir),
+                universe_assets,
+                warmup_start,
+                end,
+                trading_days=calendar,
+            )
+        else:
+            missing = sorted(set(map(str, universe_assets)) - set(map(str, preloaded_panel.assets)))
+            if missing:
+                raise ValueError(f"预加载行情缺少股票: {missing[:10]}")
+            if (
+                preloaded_panel.trading_days[0] > warmup_start
+                or preloaded_panel.trading_days[-1] < end
+            ):
+                raise ValueError(
+                    "预加载行情日期覆盖不足: "
+                    f"{preloaded_panel.trading_days[0].date()}~"
+                    f"{preloaded_panel.trading_days[-1].date()}, 需要 "
+                    f"{warmup_start.date()}~{end.date()}"
+                )
+            panel = preloaded_panel
+        research_eligible, eligibility_stats = self._research_eligibility(panel)
+        notes["research_eligibility"] = eligibility_stats
+        price_dir = Path(self.config.warehouse_dir) / "daily_prices"
+        source_hash = (
+            rq_manifest.get("source", {}).get("content_hash")
+            if rq_manifest is not None and isinstance(rq_manifest.get("source"), dict)
+            else None
+        )
+        if source_hash:
+            source_partitions: dict[str, str] | str = str(source_hash)
+        else:
+            source_files = [price_dir / name for name in sorted(panel.source_files)]
+            source_partitions = hash_files_cached(
+                source_files,
+                Path(self.config.warehouse_dir) / ".qbt_file_hash_cache.json",
+            )
+        daily_prices_hash = hash_json(
+            {
+                "schema_version": "qbt-derived-panel/v2",
+                "source_partitions": source_partitions,
+                "assets": list(map(str, panel.assets)),
+                "date_min": str(panel.trading_days[0]),
+                "date_max": str(panel.trading_days[-1]),
+                "fields": sorted(panel.wide),
+            }
         )
         dataset_refs.append(
             DatasetRef(
                 name="daily_prices",
-                uri=str((Path(self.config.warehouse_dir) / "daily_prices").resolve()),
-                content_hash=hash_json(
-                    {
-                        "wide_fields": {
-                            name: hash_frame(frame)
-                            for name, frame in sorted(panel.wide.items())
-                        },
-                        "raw_high": hash_frame(panel.raw_high),
-                        "raw_low": hash_frame(panel.raw_low),
-                        "listed_first": hash_series(panel.listed_first),
-                        "listed_last": hash_series(panel.listed_last),
-                        "source_partitions": {
-                            name: hash_file(Path(self.config.warehouse_dir) / "daily_prices" / name)
-                            for name in sorted(panel.source_files)
-                        },
-                    }
-                ),
+                uri=str(price_dir.resolve()),
+                content_hash=daily_prices_hash,
                 rows=panel.n_source_rows,
                 columns=len(panel.assets),
                 date_min=str(panel.trading_days[0].date()),
@@ -235,9 +310,7 @@ class PortfolioDataPortal:
         )
 
         missing_assets = [a for a in universe_assets if a not in set(panel.assets)]
-        no_data = [
-            a for a in panel.assets if panel.wide["adj_close"][a].notna().sum() == 0
-        ]
+        no_data = [a for a in panel.assets if panel.wide["adj_close"][a].notna().sum() == 0]
         if missing_assets or no_data:
             gap = sorted(set(missing_assets) | set(no_data))
             gap_weight = (
@@ -267,20 +340,30 @@ class PortfolioDataPortal:
                 },
                 index=panel.trading_days,
             ).fillna(False)
-            member_full = listed.astype(bool)
-            weight_full = member_full.astype("float64").div(
-                member_full.sum(axis=1).replace(0.0, np.nan), axis=0
-            ).fillna(0.0)
+            member_full = listed.astype(bool) & research_eligible
+            weight_full = (
+                member_full.astype("float64")
+                .div(member_full.sum(axis=1).replace(0.0, np.nan), axis=0)
+                .fillna(0.0)
+            )
+            membership_hash = hash_json(
+                {
+                    "schema_version": "qbt-all-a-membership/v2",
+                    "daily_prices": daily_prices_hash,
+                    "research_eligibility": rq_manifest.get("eligibility_rules", {})
+                    if rq_manifest is not None
+                    else {},
+                    "assets": list(map(str, panel.assets)),
+                    "date_min": str(panel.trading_days[0]),
+                    "date_max": str(panel.trading_days[-1]),
+                    "weighting": "daily_equal_weight",
+                }
+            )
             dataset_refs.append(
                 DatasetRef(
                     name=f"index_membership:{index_id}",
                     uri=str((Path(self.config.warehouse_dir) / "daily_prices").resolve()),
-                    content_hash=hash_json(
-                        {
-                            "member": hash_frame(member_full.astype("uint8")),
-                            "weight": hash_frame(weight_full),
-                        }
-                    ),
+                    content_hash=membership_hash,
                     rows=len(member_full),
                     columns=len(member_full.columns),
                     date_min=str(member_full.index[0].date()),
@@ -299,6 +382,7 @@ class PortfolioDataPortal:
             member_full, weight_full = expand_monthly_to_daily(
                 monthly, panel.trading_days, assets=panel.assets
             )
+            member_full &= research_eligible
 
         fill_price_field = config.execution.fill_price_field
         price_bundle = self._build_price_frame(panel, fill_price_field)
@@ -328,7 +412,9 @@ class PortfolioDataPortal:
         tradability = self._slice_tradability(tradability, dates)
         liquidity = PortfolioLiquidityData(
             adv=liquidity.adv.loc[dates],
-            turnover_rate=None if liquidity.turnover_rate is None else liquidity.turnover_rate.loc[dates],
+            turnover_rate=None
+            if liquidity.turnover_rate is None
+            else liquidity.turnover_rate.loc[dates],
             adv_window=liquidity.adv_window,
         )
         styles = {k: v.loc[dates] for k, v in styles.items()}
@@ -354,7 +440,21 @@ class PortfolioDataPortal:
             DatasetRef(
                 name="style_exposures",
                 uri="derived:proxy_styles_v1",
-                content_hash=hash_json({k: hash_frame(v) for k, v in sorted(styles.items())}),
+                content_hash=hash_json(
+                    {
+                        "schema_version": "qbt-proxy-styles/v2",
+                        "daily_prices": daily_prices_hash,
+                        "index_membership": next(
+                            ref.content_hash
+                            for ref in dataset_refs
+                            if ref.name == f"index_membership:{index_id}"
+                        ),
+                        "style_warmup_days": self.config.style_warmup_days,
+                        "styles": sorted(styles),
+                        "date_min": str(dates[0]),
+                        "date_max": str(dates[-1]),
+                    }
+                ),
                 rows=len(dates),
                 columns=len(styles),
                 date_min=str(dates[0].date()),
@@ -396,15 +496,15 @@ class PortfolioDataPortal:
         price_dir = Path(self.config.warehouse_dir) / "daily_prices"
         price_files = sorted(price_dir.glob("*.parquet"))
         if not price_files:
-            raise ValueError(f"全A等权基准没有行情分区: {price_dir}")
+            raise ValueError(f"默认研究股票池基准没有行情分区: {price_dir}")
         for path in price_files:
             try:
                 values = pd.read_parquet(path, columns=["asset_id"])["asset_id"]
             except (OSError, KeyError, ValueError) as exc:
-                raise ValueError(f"全A行情分区无法读取 asset_id: {path}") from exc
+                raise ValueError(f"研究股票池行情分区无法读取 asset_id: {path}") from exc
             assets.update(str(asset) for asset in values.dropna().unique())
         if not assets:
-            raise ValueError(f"全A等权基准没有可用股票: {price_dir}")
+            raise ValueError(f"默认研究股票池基准没有可用股票: {price_dir}")
         return sorted(assets)
 
     def _resolve_window(
@@ -422,9 +522,11 @@ class PortfolioDataPortal:
         start = max(f_start, first_snapshot)
         if config.start_date is not None:
             start = max(start, pd.Timestamp(config.start_date))
-        end = f_end
+        is_target_weights = factor.metadata.get("value_type") == "target_weights"
+        end = calendar[-1] if is_target_weights else f_end
         if config.end_date is not None:
-            end = min(end, pd.Timestamp(config.end_date))
+            requested_end = pd.Timestamp(config.end_date)
+            end = min(end, requested_end) if not is_target_weights else requested_end
         end = min(end, calendar[-1])
         if start >= end:
             raise ValueError(f"回测窗口非法: start={start.date()} end={end.date()}")
@@ -440,7 +542,7 @@ class PortfolioDataPortal:
         # 首行前收盘缺失时用当日收盘兜底, 保证限价推导不整行失效
         fallback = w["adj_close"].shift(1)
         prev_close = prev_close.where(prev_close.notna(), fallback)
-        ratio = (w["raw_close"] / w["adj_close"].replace(0.0, np.nan))
+        ratio = w["raw_close"] / w["adj_close"].replace(0.0, np.nan)
         raw_prev_close = prev_close * ratio
         return MarketPriceFrame(
             adj_open=w["adj_open"],
@@ -464,9 +566,7 @@ class PortfolioDataPortal:
         field = fill_price_field or self.config.fill_price_field
         mapping = {"adj_open": "raw_open", "adj_vwap": "raw_vwap", "adj_close": "raw_close"}
         if field not in mapping:
-            raise ValueError(
-                f"不支持的 fill_price_field={field}, 可选 {sorted(mapping)}"
-            )
+            raise ValueError(f"不支持的 fill_price_field={field}, 可选 {sorted(mapping)}")
         return mapping[field]
 
     def _build_tradability(
@@ -484,6 +584,9 @@ class PortfolioDataPortal:
             raw_open=w["raw_open"],
             # 判定口径必须跟成交价一致 (导师 B1 默认 T+1 VWAP)
             raw_fill_price=w[self._raw_fill_field(fill_price_field)],
+            raw_limit_up=w.get("raw_limit_up"),
+            raw_limit_down=w.get("raw_limit_down"),
+            is_st=w.get("is_st"),
             listed_first=panel.listed_first,
             buffer_ratio=(
                 self.config.limit_buffer_ratio
@@ -498,9 +601,8 @@ class PortfolioDataPortal:
             listed_last=panel.listed_last,
             dates=panel.trading_days,
         )
-        false_mat = pd.DataFrame(
-            False, index=panel.trading_days, columns=panel.assets
-        )
+        false_mat = pd.DataFrame(False, index=panel.trading_days, columns=panel.assets)
+        is_st = w["is_st"].fillna(0.0).gt(0.5) if "is_st" in w else false_mat.copy()
         alive = susp["is_listed"] & (~susp["is_delisted"]) & (~susp["is_suspended"])
         price_field = fill_price_field or self.config.fill_price_field
         has_price = w[price_field].notna() & (w[price_field] > 0)
@@ -508,17 +610,42 @@ class PortfolioDataPortal:
         allow_sell = alive & has_price & (~limits["limit_down_block_sell"])
         return TradabilityFrame(
             is_suspended=susp["is_suspended"],
-            is_st=false_mat.copy(),
+            is_st=is_st,
             is_delisted=susp["is_delisted"],
             is_listed=susp["is_listed"],
             limit_up_block_buy=limits["limit_up_block_buy"],
             limit_down_block_sell=limits["limit_down_block_sell"],
             allow_buy=allow_buy,
             allow_sell=allow_sell,
-            st_data_available=False,
-            delist_data_available=False,
+            st_data_available="is_st" in w,
+            delist_data_available=bool(getattr(panel, "delist_data_available", False)),
             suspension_source="derived: zero-volume or missing row within listing window",
         )
+
+    @staticmethod
+    def _research_eligibility(panel) -> tuple[pd.DataFrame, dict[str, object]]:
+        w = panel.wide
+        required = {"listed_days", "is_st", "amount", "adj_close"}
+        if not required.issubset(w):
+            fallback = pd.DataFrame(True, index=panel.trading_days, columns=panel.assets)
+            return fallback, {"available": False, "method": "legacy_warehouse_fallback"}
+        average_amount = w["amount"].fillna(0.0).rolling(20, min_periods=20).mean()
+        eligible = (
+            w["listed_days"].ge(60.0)
+            & w["is_st"].fillna(1.0).eq(0.0)
+            & w["amount"].gt(0.0)
+            & w["adj_close"].notna()
+            & average_amount.ge(20_000_000.0)
+        ).fillna(False)
+        return eligible, {
+            "available": True,
+            "method": "qpf_research_eligibility_v1",
+            "min_listed_days": 60,
+            "average_amount_window": 20,
+            "minimum_average_daily_amount": 20_000_000.0,
+            "eligible_min": int(eligible.sum(axis=1).min()),
+            "eligible_max": int(eligible.sum(axis=1).max()),
+        }
 
     def _build_liquidity(self, panel) -> PortfolioLiquidityData:
         amount = panel.wide["amount"]
@@ -558,9 +685,7 @@ class PortfolioDataPortal:
     @staticmethod
     def _slice_price_frame(bundle, dates: pd.DatetimeIndex) -> MarketPriceFrame:
         prices, _ = bundle
-        kwargs = {
-            name: getattr(prices, name).loc[dates] for name in MarketPriceFrame._MATRICES
-        }
+        kwargs = {name: getattr(prices, name).loc[dates] for name in MarketPriceFrame._MATRICES}
         return MarketPriceFrame(
             **kwargs,
             price_basis=prices.price_basis,
@@ -586,7 +711,9 @@ class PortfolioDataPortal:
             candidates = list(dates)
         elif freq == "weekly":
             s = pd.Series(dates, index=dates)
-            candidates = list(s.groupby([dates.isocalendar().year, dates.isocalendar().week]).last())
+            candidates = list(
+                s.groupby([dates.isocalendar().year, dates.isocalendar().week]).last()
+            )
         elif freq == "monthly":
             s = pd.Series(dates, index=dates)
             candidates = list(s.groupby([dates.year, dates.month]).last())
@@ -596,9 +723,7 @@ class PortfolioDataPortal:
         if not config.clock.drop_incomplete:
             return candidates
         need = (
-            config.clock.order_lag_days
-            + config.clock.fill_lag_days
-            + config.clock.return_lag_days
+            config.clock.order_lag_days + config.clock.fill_lag_days + config.clock.return_lag_days
         )
         last_signal_pos = len(dates) - need - 1
         if last_signal_pos < 0:

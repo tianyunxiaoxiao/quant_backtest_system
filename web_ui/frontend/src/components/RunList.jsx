@@ -5,9 +5,31 @@ const statusText = {
   running: '运行中',
   completed: '完成',
   failed: '失败',
+  cancelled: '已取消',
 }
 
-export default function RunList({ runs, selectedId, onSelect, onRefresh, onDelete }) {
+const formatDuration = (seconds) => {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0))
+  const hours = Math.floor(value / 3600)
+  const minutes = Math.floor((value % 3600) / 60)
+  const secs = value % 60
+  return hours > 0
+    ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+    : `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
+const timingText = (run, now) => {
+  if (run.status === 'pending') {
+    return `排队 ${formatDuration((now - Date.parse(run.created_at)) / 1000)}`
+  }
+  if (run.status === 'running' && run.started_at) {
+    return `运行 ${formatDuration((now - Date.parse(run.started_at)) / 1000)}`
+  }
+  if (run.started_at) return `耗时 ${formatDuration(run.elapsed_seconds)}`
+  return null
+}
+
+export default function RunList({ runs, selectedId, onSelect, onRefresh, onDelete, onCancel, now }) {
   return (
     <aside className="run-sidebar">
       <div className="sidebar-heading">
@@ -27,7 +49,7 @@ export default function RunList({ runs, selectedId, onSelect, onRefresh, onDelet
               className={`run-item ${run.id === selectedId ? 'active' : ''}`}
               onClick={() => onSelect(run.id)}
             >
-              <strong>{run.factor_id}</strong>
+              <strong title={run.factor_id}>{run.factor_name || run.factor_id}</strong>
               <div className="run-meta">
                 <span className={`run-state ${run.status}`}>
                   <i />{statusText[run.status] || run.status}
@@ -38,14 +60,16 @@ export default function RunList({ runs, selectedId, onSelect, onRefresh, onDelet
                 <span>{run.start_date} ~ {run.end_date}</span>
                 <span>{run.rebalance_frequency}</span>
               </div>
+              {timingText(run, now) && <div className="run-timing">{timingText(run, now)}</div>}
             </button>
             <button
               type="button"
-              className="run-delete"
-              disabled={run.status === 'running' || run.status === 'pending'}
-              onClick={() => onDelete(run.id)}
+              className={`run-delete ${run.status === 'running' || run.status === 'pending' ? 'cancel' : ''}`}
+              onClick={() => run.status === 'running' || run.status === 'pending'
+                ? onCancel(run.id)
+                : onDelete(run.id)}
             >
-              删除
+              {run.status === 'running' || run.status === 'pending' ? '取消' : '删除'}
             </button>
           </div>
         ))}

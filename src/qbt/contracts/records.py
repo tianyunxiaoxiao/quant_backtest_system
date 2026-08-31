@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from operator import attrgetter
 from typing import Any, Mapping
 
 import pandas as pd
@@ -20,7 +21,7 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DatasetRef:
     """DataPortal 实际读取的数据版本与内容哈希 (规范 6.1)。"""
 
@@ -34,7 +35,7 @@ class DatasetRef:
     notes: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RunArtifact:
     name: str
     uri: str
@@ -43,7 +44,7 @@ class RunArtifact:
     kind: str = "data"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RunManifest:
     """运行登记 (规范 3.10 / 6.1 / 19)。"""
 
@@ -65,7 +66,7 @@ class RunManifest:
     factor_code_version: str = "unversioned"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OrderRecord:
     """规范 8.1 订单字段。"""
 
@@ -83,7 +84,7 @@ class OrderRecord:
     sequence: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FillRecord:
     """规范 8.2 成交字段。"""
 
@@ -115,7 +116,7 @@ class FillRecord:
         return self.explicit_cost + self.slippage_cost + self.impact_cost
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PositionPeriodRecord:
     """单个调仓日单只标的持仓迁移记录。
 
@@ -161,16 +162,18 @@ _FILL_COLUMNS = (
 def orders_to_frame(orders: tuple[OrderRecord, ...]) -> pd.DataFrame:
     if not orders:
         return pd.DataFrame(columns=list(_ORDER_COLUMNS))
-    return pd.DataFrame(
-        [[getattr(o, c) for c in _ORDER_COLUMNS] for o in orders], columns=list(_ORDER_COLUMNS)
+    getter = attrgetter(*_ORDER_COLUMNS)
+    return pd.DataFrame.from_records(
+        map(getter, orders), columns=list(_ORDER_COLUMNS)
     )
 
 
 def fills_to_frame(fills: tuple[FillRecord, ...]) -> pd.DataFrame:
     if not fills:
         return pd.DataFrame(columns=list(_FILL_COLUMNS))
-    df = pd.DataFrame(
-        [[getattr(f, c) for c in _FILL_COLUMNS] for f in fills], columns=list(_FILL_COLUMNS)
+    getter = attrgetter(*_FILL_COLUMNS)
+    df = pd.DataFrame.from_records(
+        map(getter, fills), columns=list(_FILL_COLUMNS)
     )
     df["explicit_cost"] = df["commission"] + df["stamp_duty"] + df["transfer_fee"]
     df["total_cost"] = df["explicit_cost"] + df["slippage_cost"] + df["impact_cost"]
@@ -192,7 +195,8 @@ def position_period_to_frame(records: tuple[PositionPeriodRecord, ...]) -> pd.Da
     """把 PositionPeriodRecord 序列转成可持久化的 DataFrame。"""
     if not records:
         return pd.DataFrame(columns=list(_POSITION_PERIOD_COLUMNS))
-    return pd.DataFrame(
-        [[getattr(r, c) for c in _POSITION_PERIOD_COLUMNS] for r in records],
+    getter = attrgetter(*_POSITION_PERIOD_COLUMNS)
+    return pd.DataFrame.from_records(
+        map(getter, records),
         columns=list(_POSITION_PERIOD_COLUMNS),
     )

@@ -20,12 +20,20 @@ from qbt.engine.execution import ExecutionEngine
 
 
 def _single_asset_execution(
-    *, adjusted_price: float, raw_price: float, slippage_bps: float,
+    *, adjusted_price, raw_price, slippage_bps: float,
     adv: float = 100_000_000.0, max_adv_participation: float = 1.0,
     initial_capital: float = 10_000.0,
+    asset_id: str = "A",
+    target_values=(1.0, 0.0, 0.0),
+    rebalance_positions=(0,),
+    commission_rate: float = 0.0,
+    min_commission: float = 0.0,
+    transfer_fee_rate: float = 0.0,
+    delisted_values=None,
+    delisting_recovery_rate: float = 0.0,
 ):
-    dates = pd.date_range("2020-01-02", periods=3, freq="B")
-    columns = pd.Index(["A"])
+    dates = pd.date_range("2020-01-02", periods=len(target_values), freq="B")
+    columns = pd.Index([asset_id])
 
     def matrix(value):
         return pd.DataFrame(value, index=dates, columns=columns, dtype="float64")
@@ -42,16 +50,19 @@ def _single_asset_execution(
         raw_close=raw,
         raw_open=raw,
         raw_vwap=raw,
-        adj_factor=matrix(adjusted_price / raw_price),
+        adj_factor=adjusted.div(raw),
         volume=matrix(10_000_000),
         amount=matrix(100_000_000),
         fill_price_field="adj_open",
     )
-    tradable = matrix(True).astype(bool)
+    delisted = matrix(
+        [False] * len(target_values) if delisted_values is None else delisted_values
+    ).astype(bool)
+    tradable = ~delisted
     blocked = matrix(False).astype(bool)
     tradability = TradabilityFrame(
         is_listed=tradable,
-        is_delisted=blocked,
+        is_delisted=delisted,
         is_st=blocked,
         is_suspended=blocked,
         limit_up_block_buy=blocked,
@@ -61,11 +72,15 @@ def _single_asset_execution(
     )
     liquidity = PortfolioLiquidityData(adv=matrix(adv))
     zero_schedule = (CostRate(pd.Timestamp("1900-01-01").date(), 0.0),)
+    transfer_schedule = (
+        CostRate(pd.Timestamp("1900-01-01").date(), transfer_fee_rate),
+    )
     config = LongOnlyFactorBacktestConfig(
         rebalance_frequency="daily",
         weighting=WeightingConfig(cash_buffer=0.0),
         execution=ExecutionConfig(
-            fill_price_field="adj_open", max_adv_participation=max_adv_participation
+            fill_price_field="adj_open", max_adv_participation=max_adv_participation,
+            delisting_recovery_rate=delisting_recovery_rate,
         ),
         constraints=ConstraintConfig(
             max_adv_participation=max_adv_participation,
@@ -73,9 +88,9 @@ def _single_asset_execution(
             max_single_weight=1.0,
         ),
         costs=CostConfig(
-            commission_rate=0.0,
-            min_commission=0.0,
-            transfer_fee_schedule=zero_schedule,
+            commission_rate=commission_rate,
+            min_commission=min_commission,
+            transfer_fee_schedule=transfer_schedule,
             stamp_duty_schedule=zero_schedule,
             slippage_bps=slippage_bps,
         ),
@@ -87,12 +102,92 @@ def _single_asset_execution(
         liquidity=liquidity,
         index_universe=tradable,
     )
-    target = matrix([1.0, 0.0, 0.0])
+    target = matrix(target_values)
     return engine.run(
         target_weights=target,
-        rebalance_dates=(dates[0],),
+        rebalance_dates=tuple(dates[i] for i in rebalance_positions),
         initial_capital=initial_capital,
     )
+
+
+def test_corporate_action_between_signal_and_fill_preserves_target_exposure():
+    out = _single_asset_execution(
+        adjusted_price=[10.0, 10.0, 10.0],
+        raw_price=[10.0, 5.0, 5.0],
+        slippage_bps=0.0,
+    )
+    assert out.fills[0].filled_quantity == 2000.0
+    assert out.holdings_value.iloc[1, 0] == pytest.approx(10_000.0)
+
+
+def test_delisted_position_is_written_off_once_and_balances_accounting_identity():
+    out = _single_asset_execution(
+        adjusted_price=[10.0, 10.0, np.nan, np.nan],
+        raw_price=[10.0, 10.0, np.nan, np.nan],
+        slippage_bps=0.0,
+        target_values=(1.0, 1.0, 1.0, 1.0),
+        delisted_values=(False, False, True, True),
+    )
+
+    assert [fill.status for fill in out.fills] == ["filled", "writeoff"]
+    assert out.holdings_shares.iloc[2, 0] == 0.0
+    assert out.cash_ledger.loc[out.cash_ledger.index[2], "delisting_writeoff_amount"] == pytest.approx(
+        10_000.0
+    )
+    assert out.cash_ledger.loc[out.cash_ledger.index[2], "net_assets"] == pytest.approx(0.0)
+    assert out.accounting_identity["residual"].abs().max() < 1e-8
+
+
+def test_buy_fees_are_reserved_without_negative_cash():
+    out = _single_asset_execution(
+        adjusted_price=1.0,
+        raw_price=1.0,
+        slippage_bps=0.0,
+        asset_id="688001.SH",
+        commission_rate=0.00025,
+        min_commission=5.0,
+        transfer_fee_rate=0.001,
+    )
+    fill = out.fills[0]
+    assert fill.filled_amount + fill.commission + fill.transfer_fee <= 10_000.0
+    assert out.cash_ledger["cash"].min() >= 0.0
+
+
+def test_bse_buy_allows_single_share_increment_after_minimum():
+    out = _single_asset_execution(
+        adjusted_price=3.0,
+        raw_price=3.0,
+        slippage_bps=0.0,
+        asset_id="830001.BJ",
+        initial_capital=1_000.0,
+    )
+    assert out.fills[0].filled_quantity == 333.0
+
+
+def test_star_partial_sell_below_minimum_is_not_submitted():
+    out = _single_asset_execution(
+        adjusted_price=10.0,
+        raw_price=10.0,
+        slippage_bps=0.0,
+        asset_id="688001.SH",
+        target_values=(1.0, 0.9, 0.0, 0.0),
+        rebalance_positions=(0, 1),
+    )
+    assert [fill.side for fill in out.fills] == ["buy"]
+    assert out.holdings_shares.iloc[2, 0] == 1000.0
+
+
+def test_star_single_order_is_capped_at_exchange_maximum():
+    out = _single_asset_execution(
+        adjusted_price=1.0,
+        raw_price=1.0,
+        slippage_bps=0.0,
+        asset_id="688001.SH",
+        initial_capital=500_000.0,
+    )
+    assert out.fills[0].filled_quantity == 100_000.0
+    assert out.fills[0].status == "partial"
+    assert out.fills[0].reject_reason == "order_size_cap"
 
 
 def test_cost_model_buy_no_stamp_duty():
@@ -106,6 +201,18 @@ def test_cost_model_buy_no_stamp_duty():
     assert fc.commission > 0.0
     assert fc.transfer_fee > 0.0
     assert fc.total > 0.0
+
+
+def test_default_cost_model_applies_five_yuan_minimum_commission():
+    model = CostModel(LongOnlyFactorBacktestConfig().costs)
+    fc = model.compute(
+        side="buy",
+        filled_quantity=100,
+        fill_price=10.0,
+        reference_price=10.0,
+        fill_date=pd.Timestamp("2020-01-02"),
+    )
+    assert fc.commission == 5.0
 
 
 def test_cost_model_sell_has_stamp_duty():
@@ -161,7 +268,7 @@ def test_cash_ledger_contract_and_turnover_ignore_passive_price_drift(
     cfg = LongOnlyFactorBacktestConfig(
         execution=ExecutionConfig(fill_price_field="adj_open", max_adv_participation=1.0),
         weighting=WeightingConfig(cash_buffer=0.0),
-        costs=CostConfig(commission_rate=0.0, slippage_bps=0.0),
+        costs=CostConfig(commission_rate=0.0, min_commission=0.0, slippage_bps=0.0),
     )
     engine = ExecutionEngine(
         config=cfg,
@@ -202,7 +309,7 @@ def test_execution_enforces_max_turnover_on_actual_fills(
             min_holdings=1,
             max_single_weight=1.0,
         ),
-        costs=CostConfig(commission_rate=0.0, slippage_bps=12.0),
+        costs=CostConfig(commission_rate=0.0, min_commission=0.0, slippage_bps=12.0),
     )
     engine = ExecutionEngine(
         config=cfg,
@@ -280,8 +387,8 @@ def test_execution_lot_rounding(small_price_frame, small_tradability, small_liqu
 def test_execution_converts_raw_shares_to_adjusted_shares_without_nav_jump():
     out = _single_asset_execution(adjusted_price=5.0, raw_price=10.0, slippage_bps=0.0)
     fill = out.fills[0]
-    assert fill.filled_quantity == 900.0
-    assert out.holdings_shares.iloc[1, 0] == 1_800.0
+    assert fill.filled_quantity == 1_000.0
+    assert out.holdings_shares.iloc[1, 0] == 2_000.0
     assert out.cash_ledger["net_assets"].iloc[1] == pytest.approx(10_000.0)
     assert out.accounting_identity["residual"].abs().max() < 1e-9
 
@@ -358,7 +465,7 @@ def test_forced_index_exit_is_executed_and_tagged(
             max_single_weight=1.0,
         ),
         weighting=WeightingConfig(cash_buffer=0.0),
-        costs=CostConfig(commission_rate=0.0, slippage_bps=0.0),
+        costs=CostConfig(commission_rate=0.0, min_commission=0.0, slippage_bps=0.0),
     )
     engine = ExecutionEngine(
         config=cfg,

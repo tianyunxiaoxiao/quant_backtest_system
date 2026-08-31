@@ -5,7 +5,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-PYTHON=python3
+if [ -x "$SCRIPT_DIR/../.venv/bin/python" ]; then
+  PYTHON="$SCRIPT_DIR/../.venv/bin/python"
+else
+  PYTHON=python3
+fi
 
 # 1. 创建/激活 Python 虚拟环境
 if [ ! -d ".venv" ]; then
@@ -13,6 +17,15 @@ if [ ! -d ".venv" ]; then
   "$PYTHON" -m venv .venv
 fi
 source .venv/bin/activate
+
+python - <<'PY'
+import sys
+
+if sys.version_info < (3, 12):
+    raise SystemExit(
+        "web_ui 依赖 numpy 2.5.1，需要 Python 3.12+；请删除或移走 web_ui/.venv 后重试。"
+    )
+PY
 
 # 2. 安装后端依赖
 echo "安装后端依赖..."

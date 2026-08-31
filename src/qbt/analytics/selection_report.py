@@ -195,7 +195,7 @@ def build_selection_report(
 
     sd = selection_diagnostics.reindex(dates)
     for col in ("n_index_members", "n_eligible", "n_selected", "n_target",
-                "eligible_ratio"):
+                "n_target_outside_research_universe", "eligible_ratio"):
         if col in sd.columns:
             daily[col] = sd[col]
 

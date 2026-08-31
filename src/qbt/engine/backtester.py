@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, replace
+import platform
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -29,6 +31,7 @@ from qbt.contracts import (
 from qbt.data.hashing import (
     git_code_version,
     hash_frame,
+    hash_matrix_frame,
     hash_object,
     new_run_id,
     utc_now_iso,
@@ -36,7 +39,7 @@ from qbt.data.hashing import (
 from qbt.data.portal import PortfolioDataPortal
 
 from .execution import ExecutionEngine, ExecutionOutput
-from .selection import select_daily
+from .selection import SelectionResult, select_daily
 from .weighting import build_target_weights
 
 __all__ = ["LongOnlyFactorBacktester", "BacktesterConfig"]
@@ -47,6 +50,10 @@ class BacktesterConfig:
     """回测器自身的行为配置 (不影响业务口径)。"""
 
     repo_root: Path | None = None
+    run_id: str | None = None
+    preloaded_panel: Any | None = None
+    direct_target_weights: pd.DataFrame | None = None
+    timing_sink: dict[str, float] | None = None
 
 
 class LongOnlyFactorBacktester:
@@ -62,43 +69,74 @@ class LongOnlyFactorBacktester:
         self.bcfg = backtester_config or BacktesterConfig()
 
     def run(self, request: LongOnlyFactorBacktestRequest) -> LongOnlyFactorBacktestResult:
-        cfg = request.config
-        resolved = self.portal.resolve(request.factor, request.index_id, cfg)
-        manifest = self._build_manifest(request, resolved, cfg)
+        timing_started = perf_counter()
+        phase_started = timing_started
 
-        # P1: 选股
-        selection = select_daily(
-            factor_values=request.factor.values,
-            direction=request.factor.direction,
-            index_universe=resolved.index_universe,
-            ex_ante_tradable=resolved.tradability.ex_ante_tradable,
-            selection_fraction=cfg.selection.selection_fraction,
-            min_holdings=cfg.selection.min_holdings,
-            fail_on_insufficient_universe=cfg.selection.fail_on_insufficient_universe,
-            requires_tradable=cfg.selection.eligibility_requires_tradable,
-            requires_valid_factor=cfg.selection.eligibility_requires_valid_factor,
-        )
+        def mark_timing(name: str) -> None:
+            nonlocal phase_started
+            now = perf_counter()
+            if self.bcfg.timing_sink is not None:
+                self.bcfg.timing_sink[name] = round(now - phase_started, 6)
+            phase_started = now
+
+        cfg = request.config
+        if self.bcfg.preloaded_panel is None:
+            resolved = self.portal.resolve(request.factor, request.index_id, cfg)
+        else:
+            resolved = self.portal.resolve(
+                request.factor,
+                request.index_id,
+                cfg,
+                preloaded_panel=self.bcfg.preloaded_panel,
+            )
+        mark_timing("data_resolve")
+        manifest = self._build_manifest(request, resolved, cfg)
+        mark_timing("manifest_build")
+
+        direct_mode = self.bcfg.direct_target_weights is not None
+        if direct_mode:
+            selection, target_weights, rebalance_dates = self._prepare_direct_targets(
+                self.bcfg.direct_target_weights,
+                resolved,
+                cfg,
+            )
+        else:
+            selection = select_daily(
+                factor_values=request.factor.values,
+                direction=request.factor.direction,
+                index_universe=resolved.index_universe,
+                ex_ante_tradable=resolved.tradability.ex_ante_tradable,
+                selection_fraction=cfg.selection.selection_fraction,
+                min_holdings=cfg.selection.min_holdings,
+                fail_on_insufficient_universe=cfg.selection.fail_on_insufficient_universe,
+                requires_tradable=cfg.selection.eligibility_requires_tradable,
+                requires_valid_factor=cfg.selection.eligibility_requires_valid_factor,
+            )
+        mark_timing("selection")
 
         # P1: 目标权重
-        scores = request.factor.oriented.reindex(
-            index=resolved.index_universe.index, columns=resolved.index_universe.columns
-        )
-        weighting = build_target_weights(
-            scores=scores,
-            selected=selection.selected,
-            rank=selection.rank,
-            method=cfg.weighting.method,
-            index_weights=resolved.index_weights,
-            max_weight=cfg.weighting.max_weight,
-            cash_buffer=cfg.weighting.cash_buffer,
-            allow_equal_weight_fallback=cfg.weighting.allow_equal_weight_fallback,
-            min_holdings=cfg.selection.min_holdings,
-        )
-        target_weights = self._apply_target_turnover_limit(
-            weighting.target_weights,
-            resolved.rebalance_dates,
-            cfg.constraints.max_turnover,
-        )
+        if not direct_mode:
+            scores = request.factor.oriented.reindex(
+                index=resolved.index_universe.index, columns=resolved.index_universe.columns
+            )
+            weighting = build_target_weights(
+                scores=scores,
+                selected=selection.selected,
+                rank=selection.rank,
+                method=cfg.weighting.method,
+                index_weights=resolved.index_weights,
+                max_weight=cfg.weighting.max_weight,
+                cash_buffer=cfg.weighting.cash_buffer,
+                allow_equal_weight_fallback=cfg.weighting.allow_equal_weight_fallback,
+                min_holdings=cfg.selection.min_holdings,
+            )
+            target_weights = self._apply_target_turnover_limit(
+                weighting.target_weights,
+                resolved.rebalance_dates,
+                cfg.constraints.max_turnover,
+            )
+            rebalance_dates = resolved.rebalance_dates
+        mark_timing("target_weighting")
 
         # P2: 执行 / 账户
         engine = ExecutionEngine(
@@ -110,9 +148,16 @@ class LongOnlyFactorBacktester:
         )
         execution = engine.run(
             target_weights=target_weights,
-            rebalance_dates=resolved.rebalance_dates,
+            rebalance_dates=rebalance_dates,
             initial_capital=resolved.initial_state.initial_capital,
         )
+        mark_timing("execution")
+
+        from qbt.contracts.records import fills_to_frame, orders_to_frame
+
+        orders_frame = orders_to_frame(execution.orders)
+        fills_frame = fills_to_frame(execution.fills)
+        mark_timing("record_frames")
 
         # P3: 收益 / 净值 / 回撤
         from qbt.analytics.returns import build_return_frame
@@ -127,6 +172,7 @@ class LongOnlyFactorBacktester:
         return_frame = self._attach_holding_metrics(
             return_frame, execution.actual_weights, execution.cash_ledger
         )
+        mark_timing("returns_and_holding_metrics")
 
         # P5: 绩效指标
 
@@ -142,6 +188,7 @@ class LongOnlyFactorBacktester:
         performance = self._build_performance_report(
             return_frame, samples, cfg, execution.actual_weights
         )
+        mark_timing("performance_analytics")
 
         # P4: Alpha/Beta
         from qbt.analytics.alphabeta import compute_alpha_beta
@@ -151,6 +198,7 @@ class LongOnlyFactorBacktester:
             config=cfg.regression,
             samples=samples,
         )
+        mark_timing("alpha_beta")
 
         # P4: 风格暴露
         from qbt.analytics.style import compute_style_exposure
@@ -164,27 +212,27 @@ class LongOnlyFactorBacktester:
             excess_returns=return_frame["excess_return"],
             data_source="proxy_from_price_and_valuation",
         )
+        mark_timing("style_exposure")
 
         # P5: 选股诊断
         from qbt.analytics.selection_report import build_selection_report
-        from qbt.contracts.records import fills_to_frame
-
         selection_report = build_selection_report(
             return_frame=return_frame,
             selection_diagnostics=selection.diagnostics,
             selected=selection.selected,
             target_weights=target_weights,
-            rebalance_dates=resolved.rebalance_dates,
+            rebalance_dates=rebalance_dates,
             adj_close=resolved.prices.adj_close,
             adj_fill_price=getattr(resolved.prices, cfg.execution.fill_price_field),
             order_lag_days=cfg.clock.order_lag_days,
             fill_lag_days=cfg.clock.fill_lag_days,
             fill_price_field=cfg.execution.fill_price_field,
-            fills=fills_to_frame(execution.fills),
+            fills=fills_frame,
             factor_coverage=selection.diagnostics.get("eligible_ratio"),
             unfilled_summary=execution.unfilled_summary,
             oos_start=cfg.oos_start,
         )
+        mark_timing("selection_report")
 
         # 约束报告
         constraint_reports = self._build_constraint_reports(
@@ -192,17 +240,18 @@ class LongOnlyFactorBacktester:
             execution.actual_weights,
             execution.cash_ledger,
             execution.unfilled_summary,
-            fills_to_frame(execution.fills),
+            fills_frame,
         )
 
         # 诊断信息
         diagnostics = self._build_diagnostics(
             cfg, resolved, execution, return_frame, request.factor,
-            selection.exclusion_reasons,
+            selection.exclusion_reasons, rebalance_dates,
         )
 
         holdings = self._build_holdings_frame(execution, resolved.prices.adj_factor)
         position_period_analysis = position_period_to_frame(execution.position_period_records)
+        mark_timing("diagnostics_and_holdings")
 
         result = LongOnlyFactorBacktestResult(
             run_manifest=manifest,
@@ -232,34 +281,93 @@ class LongOnlyFactorBacktester:
             benchmark_drawdown=return_frame["benchmark_drawdown"],
             excess_drawdown=return_frame["excess_drawdown"],
             position_period_analysis=position_period_analysis,
+            orders_frame=orders_frame,
+            fills_frame=fills_frame,
         )
-        result_payload = {
-            field.name: getattr(result, field.name)
-            for field in fields(result)
-            if field.name != "run_manifest"
-        }
-        result_hash = hash_object(
-            {
-                "manifest_contract": {
-                    "strategy_id": manifest.strategy_id,
-                    "factor_id": manifest.factor_id,
-                    "index_id": manifest.index_id,
-                    "code_version": manifest.code_version,
-                    "config_version": manifest.config_version,
-                    "config": manifest.config,
-                    "dataset_refs": manifest.dataset_refs,
-                    "factor_data_version": manifest.factor_data_version,
-                    "factor_content_hash": manifest.factor_content_hash,
-                    "factor_code_version": manifest.factor_code_version,
-                    "disclosures": manifest.disclosures,
-                },
-                "result": result_payload,
-            }
-        )
+        result_hash = self._build_result_hash(manifest, result)
+        mark_timing("result_hash")
         manifest = self._with_result_hash(manifest, result_hash)
+        if self.bcfg.timing_sink is not None:
+            self.bcfg.timing_sink["backtest_total"] = round(
+                perf_counter() - timing_started, 6
+            )
         return replace(result, run_manifest=manifest)
 
     # ---------- 内部组装 ----------
+
+    @staticmethod
+    def _prepare_direct_targets(
+        source: pd.DataFrame,
+        resolved: ResolvedLongOnlyBacktestData,
+        cfg: LongOnlyFactorBacktestConfig,
+    ) -> tuple[SelectionResult, pd.DataFrame, tuple[pd.Timestamp, ...]]:
+        """Align an exact target schedule without ranking or renormalizing it."""
+        dates = resolved.prices.dates
+        assets = resolved.prices.assets
+        raw = source.copy().astype("float64")
+        if np.isinf(raw.to_numpy()).any() or (raw.fillna(0.0).to_numpy() < 0.0).any():
+            raise ValueError("直接目标权重只能包含非负有限值或 NaN")
+        raw = raw.fillna(0.0)
+        row_sums = raw.sum(axis=1)
+        if (row_sums > 1.0 + 1e-8).any():
+            day = row_sums.index[row_sums > 1.0 + 1e-8][0]
+            raise ValueError(f"{day.date()} 目标权重和 {row_sums.loc[day]:.8f} 超过 1")
+
+        in_window = raw.index[(raw.index >= dates[0]) & (raw.index <= dates[-1])]
+        non_trading = in_window.difference(dates)
+        if len(non_trading):
+            raise ValueError(f"目标权重包含非交易日: {[str(d.date()) for d in non_trading[:5]]}")
+        signal_dates = pd.DatetimeIndex(in_window)
+        need = cfg.clock.order_lag_days + cfg.clock.fill_lag_days + cfg.clock.return_lag_days
+        last_signal_pos = len(dates) - need - 1
+        if cfg.clock.drop_incomplete:
+            if last_signal_pos < 0:
+                signal_dates = signal_dates[:0]
+            else:
+                signal_dates = signal_dates[signal_dates <= dates[last_signal_pos]]
+        if len(signal_dates) == 0:
+            raise ValueError("回测窗口内没有可执行的目标权重信号日")
+
+        unknown = raw.columns.difference(assets)
+        if len(unknown) and raw.loc[signal_dates, unknown].gt(0.0).any().any():
+            active_unknown = raw.loc[signal_dates, unknown].gt(0.0).any()
+            raise ValueError(
+                f"目标权重包含行情仓库不存在的股票: {list(active_unknown[active_unknown].index[:10])}"
+            )
+        signal_matrix = raw.reindex(index=signal_dates, columns=assets, fill_value=0.0)
+        target = signal_matrix.reindex(dates).ffill().fillna(0.0)
+        selected = target.gt(0.0)
+        rank = target.rank(axis=1, method="first", ascending=False).where(selected)
+        in_research_universe = resolved.index_universe.reindex(
+            index=dates, columns=assets
+        ).fillna(False)
+        outside_research_universe = selected & ~in_research_universe
+        n_index = resolved.index_universe.sum(axis=1).astype("int64")
+        n_selected = selected.sum(axis=1).astype("int64")
+        diagnostics = pd.DataFrame(
+            {
+                "n_index_members": n_index,
+                "n_eligible": n_selected,
+                "n_selected": n_selected,
+                "n_target": n_selected,
+                "excluded_not_tradable": 0,
+                "excluded_invalid_factor": 0,
+                "excluded_both": 0,
+                "n_target_outside_research_universe": outside_research_universe.sum(
+                    axis=1
+                ).astype("int64"),
+                "eligible_ratio": n_selected.div(n_index.replace(0, np.nan)),
+                "below_min_holdings": n_selected.lt(cfg.selection.min_holdings),
+            },
+            index=dates,
+        )
+        diagnostics.index.name = "date"
+        exclusions = pd.DataFrame(columns=["date", "asset_id", "reason"])
+        return (
+            SelectionResult(selected, rank, diagnostics, exclusions),
+            target,
+            tuple(pd.Timestamp(day) for day in signal_dates),
+        )
 
     def _build_manifest(
         self,
@@ -269,13 +377,16 @@ class LongOnlyFactorBacktester:
     ) -> RunManifest:
         code_ver = git_code_version(self.bcfg.repo_root)
         index_id = request.index_id or "ALL_A_EQ"
+        direct_mode = self.bcfg.direct_target_weights is not None
         strategy_id = (
-            f"{request.factor.factor_id}_{index_id}_"
-            f"sf{cfg.selection_fraction}_wm{cfg.weighting.method}_"
-            f"cv{cfg.config_version}"
+            f"{request.factor.factor_id}_{index_id}_direct_weights_cv{cfg.config_version}"
+            if direct_mode
+            else f"{request.factor.factor_id}_{index_id}_sf{cfg.selection_fraction}_"
+            f"wm{cfg.weighting.method}_cv{cfg.config_version}"
         )
         benchmark_disclosure = (
-            "省略指数时使用 ALL_A_EQ 全A等权基准: 按每日可用上市股票等权再平衡, "
+            "省略指数时使用 ALL_A_EQ 流动性过滤后的非 ST A 股基准: "
+            "收益期使用前一交易日收盘确定的资格并等权再平衡, "
             "停牌日按最后有效收盘估值; 历史退市股缺失仍造成幸存者偏差。"
             if resolved.benchmark_basis == "all_a_equal_weight_daily"
             else "基准收益由 PIT 指数月度权重合成 (buy-and-hold within month), "
@@ -283,20 +394,30 @@ class LongOnlyFactorBacktester:
         )
         disclosures = [
             "价格与收益在复权价格空间计算, 数量与估值使用复权股数, 等价于分红再投资的全收益近似。",
-            "历史退市股与历史 ST 状态未包含在当前数据源中, 存在幸存者偏差与 ST 状态推断缺失。",
             benchmark_disclosure,
             "风格暴露为基于价量/估值字段自建的简化代理 (非 Barra), "
             "Growth/Quality/Leverage 因缺财务数据标记为缺失。",
             f"T+1 按 {cfg.execution.fill_price_field} 成交 (默认全天 VWAP), "
             "整手买入、卖出允许零股, 先卖后买, 未成交订单当日取消。",
         ]
+        if resolved.tradability.st_data_available:
+            disclosures.append(
+                "历史 ST 状态来自当前米筐快照；ST 股票不进入研究资格池，"
+                "既有持仓在下一次计划调仓时尝试卖出。"
+            )
+        else:
+            disclosures.append("当前数据源缺少历史 ST 状态，相关过滤不可用。")
+        if not resolved.tradability.delist_data_available:
+            disclosures.append(
+                "当前快照缺少历史退市股票，无法模拟退市损失，存在幸存者偏差。"
+            )
         resolved_warnings = resolved.notes.get("warnings", ())
         if not isinstance(resolved_warnings, (list, tuple)) or not all(
             isinstance(item, str) for item in resolved_warnings
         ):
             raise TypeError("resolved.notes['warnings'] must be a sequence of strings")
         disclosures.extend(resolved_warnings)
-        run_id = new_run_id("lof")
+        run_id = self.bcfg.run_id or new_run_id("lof")
         actual_factor_hash = hash_frame(request.factor.values)
         if request.factor.content_hash and request.factor.content_hash != actual_factor_hash:
             raise ValueError(
@@ -317,6 +438,22 @@ class LongOnlyFactorBacktester:
                 f"code_version={request.factor.code_version}"
             ),
         )
+        manifest_config = self._config_dict(cfg)
+        if direct_mode:
+            manifest_config["portfolio_input_mode"] = "direct_target_weights"
+            manifest_config["business_summary"].update(
+                {
+                    "portfolio_input_mode": "direct_target_weights",
+                    "rebalance_frequency": "target_weight_rows",
+                    "selection_fraction": None,
+                    "weighting_method": "uploaded_exact_weights",
+                }
+            )
+            disclosures.append(
+                "组合目标直接来自上传权重文件；每行是一个信号日，NaN 按零权重，"
+                "剩余权重为现金，不执行选股排序、研究股票池过滤、归一化或单票权重再分配；"
+                "池外目标会保留并单独计数，是否成交仍受行情、停牌、涨跌停和流动性约束。"
+            )
         return RunManifest(
             run_id=run_id,
             strategy_id=strategy_id,
@@ -325,10 +462,15 @@ class LongOnlyFactorBacktester:
             code_version=code_ver,
             config_version=cfg.config_version,
             created_at=utc_now_iso(),
-            config=self._config_dict(cfg),
+            config=manifest_config,
             dataset_refs=tuple(resolved.dataset_refs) + (factor_ref,),
             artifact_uri=str(Path("artifacts") / run_id),
-            environment={"python": "3.11+", "backtester": "qbt.v1"},
+            environment={
+                "python": platform.python_version(),
+                "numpy": np.__version__,
+                "pandas": pd.__version__,
+                "backtester": "qbt.v1",
+            },
             disclosures=tuple(disclosures),
             factor_data_version=request.factor.data_version,
             factor_content_hash=factor_hash,
@@ -338,6 +480,63 @@ class LongOnlyFactorBacktester:
     @staticmethod
     def _with_result_hash(manifest: RunManifest, result_hash: str) -> RunManifest:
         return replace(manifest, result_hash=result_hash)
+
+    @staticmethod
+    def _build_result_hash(
+        manifest: RunManifest,
+        result: LongOnlyFactorBacktestResult,
+    ) -> str:
+        """Hash the reproducibility contract and canonical economic state.
+
+        Large audit trails are protected separately by the artifact SHA-256
+        inventory.  Hashing them recursively here duplicated serialization of
+        millions of records without adding integrity coverage.
+        """
+        return hash_object(
+            {
+                "schema": "qbt-economic-result-v2",
+                "manifest_contract": {
+                    "strategy_id": manifest.strategy_id,
+                    "factor_id": manifest.factor_id,
+                    "index_id": manifest.index_id,
+                    "code_version": manifest.code_version,
+                    "config_version": manifest.config_version,
+                    "config": manifest.config,
+                    "dataset_refs": manifest.dataset_refs,
+                    "factor_data_version": manifest.factor_data_version,
+                    "factor_content_hash": manifest.factor_content_hash,
+                    "factor_code_version": manifest.factor_code_version,
+                    "disclosures": manifest.disclosures,
+                },
+                "state_hashes": {
+                    "selected_members": hash_matrix_frame(result.selected_members),
+                    "target_weights": hash_matrix_frame(result.target_weights),
+                    "actual_weights": hash_matrix_frame(result.actual_weights),
+                    "cash_ledger": hash_frame(result.cash_ledger),
+                    "costs": hash_frame(result.costs),
+                    "accounting_identity": hash_frame(
+                        result.diagnostics.accounting_identity
+                    ),
+                    "daily_returns": hash_frame(
+                        pd.concat(
+                            {
+                                "gross": result.gross_returns,
+                                "net": result.net_returns,
+                                "benchmark": result.benchmark_returns,
+                                "excess": result.excess_returns,
+                            },
+                            axis=1,
+                        )
+                    ),
+                },
+                "audit_counts": {
+                    "orders": len(result.orders),
+                    "fills": len(result.fills),
+                    "position_period_rows": len(result.position_period_analysis),
+                    "exclusion_rows": len(result.diagnostics.exclusion_reasons),
+                },
+            }
+        )
 
     @staticmethod
     def _config_dict(cfg: LongOnlyFactorBacktestConfig) -> dict[str, Any]:
@@ -696,6 +895,7 @@ class LongOnlyFactorBacktester:
         return_frame: pd.DataFrame,
         factor: FactorFrame,
         exclusion_reasons: pd.DataFrame,
+        rebalance_dates: tuple[pd.Timestamp, ...] | None = None,
     ) -> PortfolioBacktestDiagnostics:
         identity = execution.accounting_identity
         residual_bps = identity.get("residual_bps_of_nav", pd.Series(dtype="float64"))
@@ -711,13 +911,19 @@ class LongOnlyFactorBacktester:
                 "order_lag_days": cfg.clock.order_lag_days,
                 "fill_lag_days": cfg.clock.fill_lag_days,
                 "return_lag_days": cfg.clock.return_lag_days,
-                "rebalance_frequency": cfg.rebalance_frequency,
+                "rebalance_frequency": (
+                    "target_weight_rows"
+                    if factor.metadata.get("value_type") == "target_weights"
+                    else cfg.rebalance_frequency
+                ),
                 "fill_price_field": cfg.execution.fill_price_field,
             },
             data_quality={
                 "factor_coverage": factor.metadata.get("coverage_ratio"),
                 "benchmark_basis": resolved.benchmark_basis,
-                "n_rebalance_dates": len(resolved.rebalance_dates),
+                "n_rebalance_dates": len(
+                    resolved.rebalance_dates if rebalance_dates is None else rebalance_dates
+                ),
                 "n_trading_days": len(resolved.prices.dates),
                 "n_assets": len(resolved.prices.assets),
                 "price_missing_members": resolved.notes.get("price_missing_members", {}),
@@ -727,7 +933,7 @@ class LongOnlyFactorBacktester:
             accounting_identity=identity,
             warnings=tuple(
                 [
-                    f"账户恒等式最大残差: {float(residual_bps.max()):.4f} bps"
+                    f"账户恒等式最大绝对残差: {float(residual_bps.abs().max()):.4f} bps"
                     if residual_bps.notna().any()
                     else ""
                 ]

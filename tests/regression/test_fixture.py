@@ -20,7 +20,7 @@ from qbt.contracts import (
     TradabilityFrame,
     WeightingConfig,
 )
-from qbt.engine.backtester import LongOnlyFactorBacktester
+from qbt.engine.backtester import BacktesterConfig, LongOnlyFactorBacktester
 from qbt.engine.execution import ExecutionEngine
 
 
@@ -74,7 +74,7 @@ def test_fixture_accounting_identity():
         initial_capital=1_000_000.0,
         execution=ExecutionConfig(fill_price_field="adj_open"),
         weighting=WeightingConfig(cash_buffer=0.0),
-        costs=CostConfig(commission_rate=0.0, slippage_bps=0.0),
+        costs=CostConfig(commission_rate=0.0, min_commission=0.0, slippage_bps=0.0),
     )
     engine = ExecutionEngine(
         config=cfg, prices=prices, tradability=tradability,
@@ -96,7 +96,7 @@ def test_fixture_first_day_pnl():
         initial_capital=1_000_000.0,
         execution=ExecutionConfig(fill_price_field="adj_open"),
         weighting=WeightingConfig(cash_buffer=0.0),
-        costs=CostConfig(commission_rate=0.0, slippage_bps=0.0),
+        costs=CostConfig(commission_rate=0.0, min_commission=0.0, slippage_bps=0.0),
     )
     engine = ExecutionEngine(
         config=cfg, prices=prices, tradability=tradability,
@@ -131,6 +131,7 @@ def test_fixture_matches_hardcoded_golden_ledger_and_holdings():
         weighting=WeightingConfig(cash_buffer=0.0),
         costs=CostConfig(
             commission_rate=0.0,
+            min_commission=0.0,
             transfer_fee_schedule=zero_schedule,
             stamp_duty_schedule=zero_schedule,
             slippage_bps=0.0,
@@ -150,20 +151,21 @@ def test_fixture_matches_hardcoded_golden_ledger_and_holdings():
 
     np.testing.assert_allclose(
         out.cash_ledger["cash"].to_numpy(),
-        [1_000_000.0, 4_900.0, 4_900.0, 4_900.0, 4_900.0],
+        [1_000_000.0, 4_900.0, 5_200.0, 5_200.0, 5_200.0],
         rtol=0.0,
         atol=1e-9,
     )
     np.testing.assert_allclose(
         out.cash_ledger["net_assets"].to_numpy(),
-        [1_000_000.0, 1_000_000.0, 999_900.0, 1_014_800.0, 1_024_700.0],
+        [1_000_000.0, 1_000_000.0, 1_000_100.0, 1_014_900.0, 1_024_800.0],
         rtol=0.0,
         atol=1e-9,
     )
     assert out.cash_ledger["turnover"].iloc[1] == pytest.approx(0.49755)
-    assert (out.cash_ledger["turnover"].iloc[[0, 2, 3, 4]] == 0.0).all()
-    np.testing.assert_allclose(out.holdings_shares.iloc[1:]["A"], 5_000.0)
-    np.testing.assert_allclose(out.holdings_shares.iloc[1:]["B"], 4_900.0)
+    assert out.cash_ledger["turnover"].iloc[2] == pytest.approx(0.01005)
+    assert (out.cash_ledger["turnover"].iloc[[0, 3, 4]] == 0.0).all()
+    np.testing.assert_allclose(out.holdings_shares["A"], [0, 5_000, 4_900, 4_900, 4_900])
+    np.testing.assert_allclose(out.holdings_shares["B"], [0, 4_900, 5_000, 5_000, 5_000])
 
 
 @pytest.mark.regression
@@ -180,7 +182,7 @@ def test_backtest_result_hash_stability():
         initial_capital=1_000_000.0,
         execution=ExecutionConfig(fill_price_field="adj_open"),
         weighting=WeightingConfig(cash_buffer=0.0),
-        costs=CostConfig(commission_rate=0.0, slippage_bps=0.0),
+        costs=CostConfig(commission_rate=0.0, min_commission=0.0, slippage_bps=0.0),
     )
 
     class _FakePortal:
@@ -231,6 +233,11 @@ def test_backtest_result_hash_stability():
         "explicit_cost", "cumulative_realized_pnl", "unrealized_pnl", "turnover",
     }.issubset(r1.cash_ledger.columns)
     assert not r1.diagnostics.exclusion_reasons.empty
+    web_run = LongOnlyFactorBacktester(
+        _FakePortal(), backtester_config=BacktesterConfig(run_id="web-run-123")
+    ).run(request)
+    assert web_run.run_manifest.run_id == "web-run-123"
+    assert web_run.run_manifest.artifact_uri.endswith("web-run-123")
     max_weight_report = next(
         report for report in r1.constraint_reports
         if report.constraint == "max_single_weight"
@@ -248,3 +255,61 @@ def test_backtest_result_hash_stability():
     bad_factor = replace(factor, content_hash="0" * 64)
     with pytest.raises(ValueError, match="content_hash"):
         backtester.run(replace(request, factor=bad_factor))
+
+
+def test_direct_target_weights_are_not_ranked_or_normalized():
+    prices, tradability, liquidity, universe = _fixture()
+    universe.loc[:, "B"] = False
+    source = pd.DataFrame(
+        {"A": [0.6, 0.0], "B": [0.2, 0.0]},
+        index=prices.dates[[0, 2]],
+    )
+    factor = FactorFrame(
+        values=source,
+        factor_id="direct_portfolio",
+        direction=1,
+        metadata={"value_type": "target_weights", "coverage_ratio": 0.5},
+    )
+    cfg = LongOnlyFactorBacktestConfig(
+        start_date=prices.dates[0].date(),
+        end_date=prices.dates[-1].date(),
+        rebalance_frequency="monthly",
+        initial_capital=1_000_000.0,
+        execution=ExecutionConfig(fill_price_field="adj_open"),
+        weighting=WeightingConfig(cash_buffer=0.0),
+        costs=CostConfig(commission_rate=0.0, min_commission=0.0, slippage_bps=0.0),
+    )
+
+    class _DirectPortal:
+        def resolve(self, factor, index_id, config):
+            from qbt.contracts import PortfolioInitialState, ResolvedLongOnlyBacktestData
+
+            return ResolvedLongOnlyBacktestData(
+                index_universe=universe,
+                index_weights=pd.DataFrame(0.5, index=prices.dates, columns=prices.assets),
+                benchmark_returns=pd.Series(0.0, index=prices.dates),
+                prices=prices,
+                tradability=tradability,
+                style_exposures={},
+                liquidity_data=liquidity,
+                sample_masks={"full_sample": pd.Series(True, index=prices.dates)},
+                rebalance_dates=(prices.dates[0],),
+                initial_state=PortfolioInitialState(initial_capital=config.initial_capital),
+            )
+
+    result = LongOnlyFactorBacktester(
+        _DirectPortal(),
+        backtester_config=BacktesterConfig(direct_target_weights=source),
+    ).run(LongOnlyFactorBacktestRequest(factor=factor, index_id="FAKE", config=cfg))
+    assert result.target_weights.loc[prices.dates[0], "A"] == pytest.approx(0.6)
+    assert result.target_weights.loc[prices.dates[0], "B"] == pytest.approx(0.2)
+    assert result.target_weights.loc[prices.dates[1]].sum() == pytest.approx(0.8)
+    assert result.target_weights.loc[prices.dates[2]].sum() == pytest.approx(0.0)
+    assert (
+        result.selection_report.daily.loc[
+            prices.dates[0], "n_target_outside_research_universe"
+        ]
+        == 1
+    )
+    assert result.run_manifest.config["portfolio_input_mode"] == "direct_target_weights"
+    assert result.run_manifest.config["business_summary"]["rebalance_frequency"] == "target_weight_rows"

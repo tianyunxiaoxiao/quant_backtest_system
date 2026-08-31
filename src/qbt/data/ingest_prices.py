@@ -224,8 +224,15 @@ def ingest_prices(cfg: IngestConfig, *, limit: int | None = None, verbose: bool 
 
     frames: list[pd.DataFrame] = []
     n_ok = n_fail = 0
-    with ProcessPoolExecutor(max_workers=cfg.max_workers) as pool:
-        for i, res in enumerate(pool.map(_worker, [(str(f), cfg) for f in files], chunksize=32)):
+    jobs = [(str(f), cfg) for f in files]
+    if cfg.max_workers == 1:
+        results = map(_worker, jobs)
+        pool = None
+    else:
+        pool = ProcessPoolExecutor(max_workers=cfg.max_workers)
+        results = pool.map(_worker, jobs, chunksize=32)
+    try:
+        for i, res in enumerate(results):
             if res is None or res.empty:
                 n_fail += 1
             else:
@@ -233,6 +240,9 @@ def ingest_prices(cfg: IngestConfig, *, limit: int | None = None, verbose: bool 
                 n_ok += 1
             if verbose and (i + 1) % 500 == 0:
                 print(f"  ingested {i + 1}/{len(files)} files", flush=True)
+    finally:
+        if pool is not None:
+            pool.shutdown()
 
     if not frames:
         raise RuntimeError("没有任何文件成功摄取")

@@ -149,9 +149,11 @@ def select_daily(
                 "reason": pd.Series(pd.Categorical([], categories=reason_names)),
             }
         )
+    result_dates = dates.copy().rename("date")
+    result_assets = assets.copy().rename("asset_id")
     return SelectionResult(
-        selected=pd.DataFrame(selected, index=dates, columns=assets),
-        rank=pd.DataFrame(rank_arr, index=dates, columns=assets),
+        selected=pd.DataFrame(selected, index=result_dates, columns=result_assets),
+        rank=pd.DataFrame(rank_arr, index=result_dates, columns=result_assets),
         diagnostics=diagnostics,
         exclusion_reasons=exclusion_reasons,
     )

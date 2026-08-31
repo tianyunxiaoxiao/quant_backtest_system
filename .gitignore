@@ -32,3 +32,11 @@ htmlcov/
 # Local env
 .env
 .env.local
+
+# Locally generated RQData warehouse
+warehouse_rqdata/
+warehouse_rqdata_*/
+
+# Local release/input/output data generated during deployment validation
+data/benchmark_quotes_*/
+web_ui/data/

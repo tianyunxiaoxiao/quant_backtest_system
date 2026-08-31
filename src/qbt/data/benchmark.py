@@ -1,7 +1,7 @@
 """指数基准收益构建 (规范 6.3, 确认清单 A2 - 待补官方序列, 当前用代理)。
 
 指定指数没有官方点位时, 用 PIT 成分与月初权重合成基准; 未指定指数时,
-使用每日再平衡的全A等权基准 (`ALL_A_EQ`)。
+使用每日再平衡的流动性过滤后的非 ST A 股等权基准 (`ALL_A_EQ`)。
 口径声明 (必须进披露清单):
 - 用月初 PIT 权重按日漂移 (buy-and-hold within month), 月初快照日重置权重,
   与真实指数的日度再平衡口径存在跟踪误差。
@@ -23,7 +23,7 @@ __all__ = ["build_benchmark_returns", "build_equal_weight_all_a_returns", "load_
 def build_equal_weight_all_a_returns(
     *, adj_close: pd.DataFrame, member: pd.DataFrame
 ) -> tuple[pd.Series, dict]:
-    """Build the default daily-rebalanced equal-weighted All-A benchmark."""
+    """Build the daily-rebalanced equal-weighted research-universe benchmark."""
     dates = adj_close.index
     member = member.reindex(index=dates, columns=adj_close.columns).fillna(False).astype(bool)
     # A listed stock remains in an equal-weight basket during a suspension.
@@ -34,12 +34,15 @@ def build_equal_weight_all_a_returns(
     valid = member & observed_by_date
     returns = adj_close.ffill().pct_change(fill_method=None)
     returns = returns.where(np.isfinite(returns)).fillna(0.0)
-    weights = valid.astype("float64")
+    # A close-to-close return belongs to the basket fixed at the prior close.
+    # Using today's eligibility would admit entrants after observing today's move.
+    return_valid = valid.shift(1, fill_value=False)
+    weights = return_valid.astype("float64")
     weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
     series = (weights * returns).sum(axis=1).astype("float64").rename("benchmark_return")
     if len(series):
         series.iloc[0] = 0.0
-    n_members = valid.sum(axis=1)
+    n_members = return_valid.sum(axis=1)
     stats = {
         "method": "all_a_equal_weight_daily",
         "source": "synthetic:all_a_equal_weight_daily",
@@ -90,20 +93,12 @@ def build_benchmark_returns(
     coverage = np.zeros(n, dtype="float64")
     w0_arr = w0.to_numpy()
     ret_arr = ret_filled.to_numpy()
-    member_arr = index_member.to_numpy()
     price_ok = adj_close.notna().to_numpy()
 
     for i in range(n):
         snap = w0_arr[i]
-        if i in reset_pos or not np.isfinite(active).any() or active.sum() <= 0:
+        if active.sum() <= 0:
             active = np.where(np.isfinite(snap), snap, 0.0)
-        elif not drift_within_period:
-            active = np.where(np.isfinite(snap), snap, 0.0)
-        else:
-            # 成分调整日之外, 只在权重快照变化时重置
-            active = np.where(np.isfinite(snap) & (snap > 0), active, 0.0)
-            if active.sum() <= 0:
-                active = np.where(np.isfinite(snap), snap, 0.0)
         tot = active.sum()
         if tot <= 0:
             out[i] = 0.0
@@ -111,9 +106,13 @@ def build_benchmark_returns(
         w = active / tot
         r = ret_arr[i]
         out[i] = float(np.dot(w, r))
-        coverage[i] = float(w[member_arr[i] & price_ok[i]].sum())
+        coverage[i] = float(w[price_ok[i]].sum())
         if drift_within_period:
             active = active * (1.0 + r)
+        # A snapshot that becomes effective today determines the next
+        # close-to-close return period; it must not receive today's return.
+        if i in reset_pos or not drift_within_period:
+            active = np.where(np.isfinite(snap), snap, 0.0)
 
     series = pd.Series(out, index=dates, name="benchmark_return")
     series.iloc[0] = 0.0

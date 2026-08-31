@@ -22,6 +22,16 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _require_legacy_integration_data(root: Path) -> tuple[Path, Path]:
+    warehouse = root / "warehouse"
+    index_dir = root.parent / "指数月度成分股"
+    has_prices = (warehouse / "daily_prices").is_dir()
+    has_index = index_dir.is_dir() and any(index_dir.glob("*.xlsx"))
+    if not (has_prices and has_index):
+        pytest.skip("legacy real-data integration fixture is not installed")
+    return warehouse, index_dir
+
+
 def _make_backtest(
     *,
     factor_id: str = "reversal_20d",
@@ -33,8 +43,7 @@ def _make_backtest(
     max_adv_participation: float = 0.10,
 ) -> qbt.LongOnlyFactorBacktestResult:
     root = _project_root()
-    warehouse = root / "warehouse"
-    index_dir = root.parent / "指数月度成分股"
+    warehouse, index_dir = _require_legacy_integration_data(root)
     portal = qbt.PortfolioDataPortal(
         PortalConfig(warehouse_dir=warehouse, index_source_dir=index_dir, style_warmup_days=300)
     )
@@ -62,7 +71,11 @@ def _make_backtest(
         start_date=pd.Timestamp(start).date(),
         end_date=pd.Timestamp(end).date(),
         rebalance_frequency=rebalance_frequency,
-        costs=qbt.CostConfig(commission_rate=commission_rate, slippage_bps=slippage_bps),
+        costs=qbt.CostConfig(
+            commission_rate=commission_rate,
+            min_commission=0.0 if commission_rate == 0.0 else 5.0,
+            slippage_bps=slippage_bps,
+        ),
         constraints=qbt.ConstraintConfig(max_adv_participation=max_adv_participation),
     )
     request = qbt.LongOnlyFactorBacktestRequest(factor=factor, index_id="000905.SH", config=config)

@@ -37,13 +37,16 @@ def _sortino(excess: pd.Series, ppy: int) -> float:
     return float(excess.mean() / dd * np.sqrt(ppy))
 
 
-def _period_win_rate(ret: pd.Series, freq: str) -> float:
-    if ret.empty:
+def _period_win_rate(portfolio: pd.Series, benchmark: pd.Series, freq: str) -> float:
+    if portfolio.empty:
         return float("nan")
-    grp = (1.0 + ret.astype("float64")).groupby(ret.index.to_period(freq)).prod() - 1.0
-    if grp.empty:
+    key = portfolio.index.to_period(freq)
+    port = (1.0 + portfolio.astype("float64")).groupby(key).prod()
+    bench = (1.0 + benchmark.astype("float64")).groupby(key).prod()
+    relative = port / bench.where(bench > 0) - 1.0
+    if relative.empty:
         return float("nan")
-    return float((grp > 0).mean())
+    return float((relative > 0).mean())
 
 
 def compute_performance_stats(
@@ -166,8 +169,8 @@ def compute_performance_stats(
         information_ratio=ir,
         excess_max_drawdown=float(drawdown_series(enav).min()),
         win_rate_daily=float((excess > 0).mean()),
-        win_rate_monthly=_period_win_rate(excess, "M"),
-        win_rate_yearly=_period_win_rate(excess, "Y"),
+        win_rate_monthly=_period_win_rate(net, bench, "M"),
+        win_rate_yearly=_period_win_rate(net, bench, "Y"),
         gross_annual_return=gross_ann,
         turnover_annual_oneway=to_ann,
         total_cost=total_cost,

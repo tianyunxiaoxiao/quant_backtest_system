@@ -7,7 +7,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from qbt.data.hashing import git_code_version, hash_frame, hash_source_tree
+from qbt.data.hashing import (
+    git_code_version,
+    hash_files_cached,
+    hash_frame,
+    hash_matrix_frame,
+    hash_source_tree,
+)
 from qbt.data.ingest_prices import IngestConfig, ingest_prices
 from qbt.reporting.artifacts import ArtifactWriter
 
@@ -59,6 +65,37 @@ def test_hash_frame_has_unambiguous_labels_values_and_datetime_precision():
     )
     assert hash_frame(left) != hash_frame(later)
     assert hash_frame(left) != hash_frame(left.rename_axis("other"))
+
+
+def test_hash_matrix_frame_is_stable_and_content_bound():
+    index = pd.date_range("2020-01-01", periods=3, name="date")
+    frame = pd.DataFrame(
+        [[0.0, np.nan], [1.234567890123, 2.0], [-0.0, np.inf]],
+        index=index,
+        columns=pd.Index(["A", "B"], name="asset_id"),
+    )
+    same = frame.copy()
+    same.iloc[1, 0] += 1e-12
+    changed = frame.copy()
+    changed.iloc[1, 0] += 1e-5
+
+    assert hash_matrix_frame(frame) == hash_matrix_frame(same)
+    assert hash_matrix_frame(frame) != hash_matrix_frame(changed)
+    assert hash_matrix_frame(frame) != hash_matrix_frame(frame.rename_axis("other"))
+    assert hash_matrix_frame(frame.astype("float32")) != hash_matrix_frame(frame)
+
+
+def test_file_hash_cache_invalidates_when_content_changes(tmp_path):
+    source = tmp_path / "partition.parquet"
+    source.write_bytes(b"first")
+    cache = tmp_path / "hash-cache.json"
+    first = hash_files_cached([source], cache)
+    second = hash_files_cached([source], cache)
+    assert second == first
+
+    source.write_bytes(b"second-value")
+    third = hash_files_cached([source], cache)
+    assert third[source.name] != first[source.name]
 
 
 def test_artifact_json_replaces_all_nonfinite_values(tmp_path):

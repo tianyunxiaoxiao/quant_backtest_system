@@ -1,4 +1,5 @@
 """Artifact serving and chart-data endpoints."""
+
 from __future__ import annotations
 
 import io
@@ -7,27 +8,33 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from qbt_web import db
+from qbt_web.auth import owns, principal_from_request
 from qbt_web.config import settings
 from qbt_web.models import ArtifactList, ChartData
 from qbt_web.services import chartdata
+from qbt_web.services.benchmark_comparison import compare_run
 
 router = APIRouter(prefix="/api/runs")
 
 
-def _artifact_dir(run_id: str) -> Path:
+def _artifact_dir(run_id: str, request: Request) -> Path:
     record = db.get_run(run_id)
-    if record is None or record.artifact_dir is None:
+    if (
+        record is None
+        or record.artifact_dir is None
+        or not owns(principal_from_request(request), record.owner_user_id)
+    ):
         raise HTTPException(status_code=404, detail="Run not found")
     return Path(record.artifact_dir)
 
 
 @router.get("/{run_id}/artifacts", response_model=ArtifactList)
-async def list_artifacts(run_id: str):
-    root = _artifact_dir(run_id)
+async def list_artifacts(run_id: str, request: Request):
+    root = _artifact_dir(run_id, request)
     if not root.exists():
         return {"artifacts": []}
     items: list[dict[str, Any]] = []
@@ -47,8 +54,8 @@ async def list_artifacts(run_id: str):
 
 
 @router.get("/{run_id}/artifacts/{path:path}")
-async def get_artifact(run_id: str, path: str):
-    root = _artifact_dir(run_id)
+async def get_artifact(run_id: str, path: str, request: Request):
+    root = _artifact_dir(run_id, request)
     target = (root / path).resolve()
     if root not in target.parents and target != root:
         raise HTTPException(status_code=400, detail="Invalid path")
@@ -59,8 +66,8 @@ async def get_artifact(run_id: str, path: str):
 
 
 @router.get("/{run_id}/chart-data/{chart}", response_model=ChartData)
-async def get_chart_data(run_id: str, chart: str):
-    root = _artifact_dir(run_id)
+async def get_chart_data(run_id: str, chart: str, request: Request):
+    root = _artifact_dir(run_id, request)
     builder = chartdata.CHART_BUILDERS.get(chart)
     if builder is None:
         raise HTTPException(status_code=404, detail="Unknown chart")
@@ -71,9 +78,24 @@ async def get_chart_data(run_id: str, chart: str):
     return {"chart": chart, "data": data}
 
 
+@router.get("/{run_id}/comparison")
+async def benchmark_comparison(
+    run_id: str,
+    request: Request,
+    benchmark_id: str = "ALL_A_EQ",
+):
+    root = _artifact_dir(run_id, request)
+    try:
+        return compare_run(root, benchmark_id, settings.warehouse_dir)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/{run_id}/report.md")
-async def get_report_markdown(run_id: str):
-    root = _artifact_dir(run_id)
+async def get_report_markdown(run_id: str, request: Request):
+    root = _artifact_dir(run_id, request)
     target = root / "backtest_report.md"
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Report not ready")
@@ -85,9 +107,18 @@ async def get_report_markdown(run_id: str):
 # ---------------------------------------------------------------------------
 
 _POSITION_COLUMNS = [
-    "fill_date", "asset_id", "side", "filled_quantity", "fill_price",
-    "filled_amount", "commission", "stamp_duty", "transfer_fee",
-    "explicit_cost", "total_cost", "status",
+    "fill_date",
+    "asset_id",
+    "side",
+    "filled_quantity",
+    "fill_price",
+    "filled_amount",
+    "commission",
+    "stamp_duty",
+    "transfer_fee",
+    "explicit_cost",
+    "total_cost",
+    "status",
 ]
 
 
@@ -116,9 +147,9 @@ def _fill_record(row: pd.Series) -> dict[str, Any]:
 
 
 @router.get("/{run_id}/positions/latest")
-async def latest_positions(run_id: str, periods: int = 2):
+async def latest_positions(run_id: str, request: Request, periods: int = 2):
     """最新 N 期 (默认 2 期) 调仓成交明细, 按期分组返回。"""
-    root = _artifact_dir(run_id)
+    root = _artifact_dir(run_id, request)
     fills = _load_fills(root)
     executed = fills[fills["filled_quantity"] > 0].copy()
     if executed.empty:
@@ -148,9 +179,9 @@ async def latest_positions(run_id: str, periods: int = 2):
 
 
 @router.get("/{run_id}/positions/export")
-async def export_positions(run_id: str):
+async def export_positions(run_id: str, request: Request):
     """全部历史成交记录导出为 CSV (utf-8-sig, Excel 可直接打开中文)。"""
-    root = _artifact_dir(run_id)
+    root = _artifact_dir(run_id, request)
     fills = _load_fills(root)
     columns = [c for c in _POSITION_COLUMNS if c in fills.columns]
     df = fills[columns].sort_values(["fill_date", "asset_id"])

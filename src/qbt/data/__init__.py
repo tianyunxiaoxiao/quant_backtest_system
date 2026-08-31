@@ -15,6 +15,7 @@ from qbt.data.ingest_index import (
     ingest_index_membership,
 )
 from qbt.data.ingest_prices import IngestConfig, ingest_prices, load_single_stock
+from qbt.data.ingest_rq_snapshot import RQSnapshotIngestConfig, build_rq_snapshot_warehouse
 from qbt.data.panel import PricePanel, build_trading_calendar, load_price_panel
 from qbt.data.portal import PortalConfig, PortfolioDataPortal
 from qbt.data.style import (
@@ -32,6 +33,7 @@ __all__ = [
     "DEFAULT_INDEX_ID",
     "IndexSpec",
     "IngestConfig",
+    "RQSnapshotIngestConfig",
     "MISSING_STYLES",
     "PortalConfig",
     "PortfolioDataPortal",
@@ -43,6 +45,7 @@ __all__ = [
     "build_style_exposures",
     "build_suspension",
     "build_trading_calendar",
+    "build_rq_snapshot_warehouse",
     "cross_section_zscore",
     "expand_monthly_to_daily",
     "ingest_index_membership",

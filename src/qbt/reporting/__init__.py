@@ -6,9 +6,16 @@ from qbt.reporting.artifacts import (
     verify_backtest_artifact_roundtrip,
     write_backtest_artifacts,
 )
-from qbt.reporting.charts import ChartBuilder, ChartResult
 from qbt.reporting.md_builder import MarkdownReportBuilder
 from qbt.reporting.reporter import LongOnlyFactorReporter
+
+
+def __getattr__(name: str):
+    if name in {"ChartBuilder", "ChartResult"}:
+        from qbt.reporting.charts import ChartBuilder, ChartResult
+
+        return {"ChartBuilder": ChartBuilder, "ChartResult": ChartResult}[name]
+    raise AttributeError(name)
 
 __all__ = [
     "ArtifactWriter",

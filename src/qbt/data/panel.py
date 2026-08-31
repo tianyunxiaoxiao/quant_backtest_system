@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 __all__ = ["PricePanel", "load_price_panel", "build_trading_calendar"]
 
@@ -17,6 +18,7 @@ _WIDE_FIELDS = (
     "adj_open", "adj_high", "adj_low", "adj_close", "adj_prev_close", "adj_vwap",
     "raw_open", "raw_close", "raw_vwap", "adj_factor", "volume", "amount",
     "turnover_rate", "float_mktcap", "total_mktcap", "pb", "pe", "ps",
+    "raw_limit_up", "raw_limit_down", "is_st", "listed_days",
 )
 
 
@@ -31,6 +33,7 @@ class PricePanel:
     assets: pd.Index
     source_files: tuple[str, ...]
     n_source_rows: int
+    delist_data_available: bool = False
 
 
 def build_trading_calendar(
@@ -69,9 +72,9 @@ def load_price_panel(
     n_rows = 0
 
     for path in sorted((Path(warehouse) / "daily_prices").glob("*.parquet")):
-        available = pd.read_parquet(path, columns=["asset_id"]).head(0)
+        available = set(pq.read_schema(path).names)
         use_cols = list(dict.fromkeys(cols + ["listed_first_date", "listed_last_date"]))
-        df = pd.read_parquet(path, columns=[c for c in use_cols if c or available is not None])
+        df = pd.read_parquet(path, columns=[c for c in use_cols if c in available])
         df["asset_id"] = df["asset_id"].astype(str)
         df = df[df["asset_id"].isin(want)]
         if df.empty:
@@ -101,16 +104,31 @@ def load_price_panel(
         trading_days = trading_days[(trading_days >= start) & (trading_days <= end)]
 
     asset_index = pd.Index(assets, name="asset_id")
+    # 仓库是长表且同一日期/股票理论上唯一；保留原 pivot_table(aggfunc="last")
+    # 的重复行语义，再一次性计算二维位置，避免每个字段重复 groupby/unstack。
+    long = long.drop_duplicates(subset=["date", "asset_id"], keep="last")
+    date_pos = trading_days.get_indexer(pd.DatetimeIndex(long["date"]))
+    asset_pos = asset_index.get_indexer(long["asset_id"])
+    valid_pos = (date_pos >= 0) & (asset_pos >= 0)
+    flat_pos = date_pos[valid_pos] * len(asset_index) + asset_pos[valid_pos]
     wide: dict[str, pd.DataFrame] = {}
     for field in fields:
         if field not in long.columns:
             continue
-        mat = long.pivot_table(index="date", columns="asset_id", values=field, aggfunc="last")
-        wide[field] = mat.reindex(index=trading_days, columns=asset_index).astype("float64")
+        values = pd.to_numeric(long[field], errors="coerce").to_numpy(dtype="float64")
+        matrix = np.full((len(trading_days), len(asset_index)), np.nan, dtype="float64")
+        matrix.ravel()[flat_pos] = values[valid_pos]
+        wide[field] = pd.DataFrame(matrix, index=trading_days, columns=asset_index)
 
     raw_ratio = wide["raw_close"] / wide["adj_close"].replace(0.0, np.nan)
     raw_high = wide["adj_high"] * raw_ratio
     raw_low = wide["adj_low"] * raw_ratio
+
+    asset_master_path = Path(warehouse) / "asset_master.parquet"
+    delist_data_available = False
+    if asset_master_path.is_file():
+        master_columns = set(pq.read_schema(asset_master_path).names)
+        delist_data_available = "de_listed_date" in master_columns
 
     return PricePanel(
         wide=wide,
@@ -122,4 +140,5 @@ def load_price_panel(
         assets=asset_index,
         source_files=tuple(source_files),
         n_source_rows=n_rows,
+        delist_data_available=delist_data_available,
     )

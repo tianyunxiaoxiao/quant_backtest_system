@@ -273,7 +273,9 @@ class MarkdownReportBuilder:
             "order_quantity_raw", "fill_quantity_raw", "post_quantity_raw",
             "fill_price", "fill_ratio", "status",
         ]
-        display = df[[c for c in display_cols if c in df.columns]].copy()
+        display = df[[c for c in display_cols if c in df.columns]].head(
+            self.max_table_rows
+        ).copy()
         display = display.rename(columns={
             "date": "成交日",
             "asset_id": "标的",

@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import {
   fetchArtifacts,
+  fetchBenchmarkComparison,
+  fetchBenchmarks,
   fetchChartData,
   fetchLatestPositions,
   fetchReportMarkdown,
@@ -16,7 +18,7 @@ const fmtPct = (v) => {
   if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
   return `${(v * 100).toFixed(2)}%`
 }
-const fmtNum = (v, digits = 3) => {
+const fmtNum = (v, digits = 2) => {
   if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
   return v.toFixed(digits)
 }
@@ -28,6 +30,29 @@ const fmtInt = (v) => {
   if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
   return v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })
 }
+const fmtRate = (v, digits = 4) => {
+  if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
+  return `${(v * 100).toFixed(digits).replace(/\.?0+$/, '')}%`
+}
+
+const FREQUENCY_LABELS = {
+  daily: '日度', weekly: '周度', monthly: '月度', target_weight_rows: '按权重文件日期',
+}
+const WEIGHTING_LABELS = {
+  factor_strength: '因子强度',
+  equal_weight: '等权',
+  index_weight: '指数权重',
+}
+const FILL_PRICE_LABELS = { adj_vwap: 'VWAP', adj_open: '开盘价', adj_close: '收盘价' }
+const FACTOR_SOURCE_LABELS = { demo: '内置公式', values: '导入数据', platform: '因子研究平台' }
+
+const ParameterItem = ({ label, value, note }) => (
+  <div className="parameter-item">
+    <dt>{label}</dt>
+    <dd>{value ?? 'NA'}</dd>
+    {note && <small>{note}</small>}
+  </div>
+)
 
 // 指标类型: pct = 百分比; num = 比率/数值; money = 货币金额; int = 计数。
 // 2026-08-18 修复: 此前样本内/样本外列一律按百分比格式化, 导致
@@ -40,10 +65,10 @@ const METRIC_TYPES = {
   excess_annual_return_geometric: 'pct', excess_total_return_geometric: 'pct',
   information_ratio: 'num',
   win_rate_daily: 'pct', win_rate_monthly: 'pct', win_rate_yearly: 'pct',
-  turnover_annual_oneway: 'pct',
+  turnover_annual_oneway: 'num',
   total_cost: 'money',
   cost_erosion_ratio: 'pct',
-  avg_holdings: 'int',
+  avg_holdings: 'num',
   avg_top10_concentration: 'pct', avg_cash_ratio: 'pct',
 }
 const fmtMetric = (key, v) => {
@@ -55,7 +80,7 @@ const fmtMetric = (key, v) => {
 }
 
 const TAB_CHARTS = {
-  overview: ['nav', 'performance', 'alpha_beta'],
+  overview: [],
   returns: ['drawdown', 'monthly', 'annual', 'rolling'],
   alpha_beta: ['alpha_beta_contrib', 'alpha_beta_rolling'],
   style: ['style_timeseries', 'style_heatmap', 'style_summary'],
@@ -66,21 +91,58 @@ const TAB_CHARTS = {
   artifacts: [],
 }
 
-export default function Dashboard({ run, activeTab }) {
+const formatDuration = (seconds) => {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0))
+  const hours = Math.floor(value / 3600)
+  const minutes = Math.floor((value % 3600) / 60)
+  const secs = value % 60
+  return [hours, minutes, secs].map(part => String(part).padStart(2, '0')).join(':')
+}
+
+export default function Dashboard({ run, activeTab, now, onCancel }) {
   const [data, setData] = useState({})
   const [loading, setLoading] = useState({})
   const [report, setReport] = useState('')
   const [artifacts, setArtifacts] = useState([])
   const [positions, setPositions] = useState(null)
   const [fullRun, setFullRun] = useState(null)
+  const [benchmarks, setBenchmarks] = useState([])
+  const [benchmarkId, setBenchmarkId] = useState('ALL_A_EQ')
+  const [comparisonError, setComparisonError] = useState('')
 
   useEffect(() => {
     if (!run) return
+    setFullRun(null)
     fetchRun(run.id).then(setFullRun)
+    setBenchmarkId('ALL_A_EQ')
+    setComparisonError('')
   }, [run?.id])
 
   useEffect(() => {
-    if (!run) return
+    fetchBenchmarks()
+      .then(items => setBenchmarks(Array.isArray(items) ? items : []))
+      .catch(() => setBenchmarks([]))
+  }, [])
+
+  useEffect(() => {
+    if (!run || run.status !== 'completed') return
+    const key = `${run.id}-comparison-${benchmarkId}`
+    if (data[key]) return
+    setLoading(l => ({ ...l, comparison: true }))
+    setComparisonError('')
+    fetchBenchmarkComparison(run.id, benchmarkId)
+      .then(result => {
+        setData(prev => ({ ...prev, [key]: result }))
+        setLoading(l => ({ ...l, comparison: false }))
+      })
+      .catch(err => {
+        setComparisonError(err.response?.data?.detail || err.message)
+        setLoading(l => ({ ...l, comparison: false }))
+      })
+  }, [run?.id, run?.status, benchmarkId, data])
+
+  useEffect(() => {
+    if (!run || run.status !== 'completed') return
     const charts = TAB_CHARTS[activeTab] || []
     charts.forEach(chart => {
       if (data[`${run.id}-${chart}`]) return
@@ -92,7 +154,7 @@ export default function Dashboard({ run, activeTab }) {
         })
         .catch(() => setLoading(l => ({ ...l, [chart]: false })))
     })
-  }, [run?.id, activeTab])
+  }, [run?.id, run?.status, activeTab])
 
   useEffect(() => {
     if (!run || activeTab !== 'report') return
@@ -122,9 +184,47 @@ export default function Dashboard({ run, activeTab }) {
   }
 
   const isRunning = run.status === 'running' || run.status === 'pending'
+  const elapsedSeconds = run.status === 'running' && run.started_at
+    ? (now - Date.parse(run.started_at)) / 1000
+    : run.elapsed_seconds
 
   const performance = data[`${run.id}-performance`]
   const alphaBetaSummary = data[`${run.id}-alpha_beta`]
+  const comparison = data[`${run.id}-comparison-${benchmarkId}`]
+  const overviewPerformance = comparison?.performance || performance?.full_sample
+  const overviewSummary = comparison?.summary || run.summary
+  const overviewNav = comparison?.nav || data[`${run.id}-nav`]
+  const runConfig = fullRun?.config
+
+  const benchmarkToolbar = (
+    <>
+      <div className="benchmark-toolbar">
+        <div>
+          <span className="toolbar-label">对比基准</span>
+          <strong>{loading.comparison ? '加载中' : comparison?.benchmark?.name || '加载中'}</strong>
+        </div>
+        <select
+          value={benchmarkId}
+          onChange={event => setBenchmarkId(event.target.value)}
+          disabled={loading.comparison}
+          aria-label="对比基准"
+        >
+          {benchmarks.map(item => (
+            <option key={item.benchmark_id} value={item.benchmark_id}>
+              {item.name} ({item.benchmark_id})
+            </option>
+          ))}
+        </select>
+      </div>
+      {comparisonError && <div className="inline-error">基准切换失败：{comparisonError}</div>}
+    </>
+  )
+
+  const comparisonChart = (name) => {
+    if (comparison?.charts?.[name]) return comparison.charts[name]
+    if (loading.comparison) return null
+    return data[`${run.id}-${name}`]
+  }
 
   const renderMarkdown = (md) => {
     // Very simple markdown-to-HTML conversion.
@@ -146,11 +246,12 @@ export default function Dashboard({ run, activeTab }) {
       case 'overview':
         return (
           <>
-            <MetricCards summary={run.summary} />
+            {benchmarkToolbar}
+            <MetricCards summary={overviewSummary} />
             <div className="chart-grid">
-              <LineChart data={data[`${run.id}-nav`]} title="组合 / 基准 / 超额收益率" yLabel="累计收益率" percentAxis />
+              <LineChart data={overviewNav} title="组合 / 基准 / 超额收益率" yLabel="累计收益率" percentAxis />
             </div>
-            {performance && performance.full_sample && (
+            {overviewPerformance && (
               <div className="content-section">
                 <div className="section-heading"><h2>绩效指标详情</h2></div>
                 <div className="table-wrap">
@@ -159,8 +260,6 @@ export default function Dashboard({ run, activeTab }) {
                       <tr>
                         <th>指标</th>
                         <th>全样本</th>
-                        {performance.in_sample && <th>样本内</th>}
-                        {performance.out_of_sample && <th>样本外</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -178,7 +277,7 @@ export default function Dashboard({ run, activeTab }) {
                         ['日胜率', 'win_rate_daily'],
                         ['月胜率', 'win_rate_monthly'],
                         ['年胜率', 'win_rate_yearly'],
-                        ['年化换手(单边)', 'turnover_annual_oneway'],
+                        ['年化换手(单边, 倍)', 'turnover_annual_oneway'],
                         ['总成本', 'total_cost'],
                         ['成本侵蚀比', 'cost_erosion_ratio'],
                         ['平均持股数', 'avg_holdings'],
@@ -187,9 +286,7 @@ export default function Dashboard({ run, activeTab }) {
                       ].map(([label, key]) => (
                         <tr key={key}>
                           <td>{label}</td>
-                          <td>{fmtMetric(key, performance.full_sample[key])}</td>
-                          {performance.in_sample && <td>{fmtMetric(key, performance.in_sample[key])}</td>}
-                          {performance.out_of_sample && <td>{fmtMetric(key, performance.out_of_sample[key])}</td>}
+                          <td>{fmtMetric(key, overviewPerformance[key])}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -197,16 +294,70 @@ export default function Dashboard({ run, activeTab }) {
                 </div>
               </div>
             )}
+            {runConfig && (
+              <div className="content-section backtest-parameters">
+                <div className="section-heading parameter-section-heading">
+                  <h2>回测参数</h2>
+                  <span>本次运行冻结配置</span>
+                </div>
+
+                <div className="parameter-group">
+                  <h3>策略与组合</h3>
+                  <dl className="parameter-grid">
+                    <ParameterItem label="因子" value={run.factor_name || run.factor_id} note={run.factor_name ? run.factor_id : null} />
+                    <ParameterItem label="组合输入" value={runConfig.portfolio_input_mode === 'direct_target_weights' ? '直接目标权重' : '因子分数'} />
+                    <ParameterItem label="因子来源" value={FACTOR_SOURCE_LABELS[runConfig.factor_source] || runConfig.factor_source} />
+                    <ParameterItem label="因子方向" value={runConfig.portfolio_input_mode === 'direct_target_weights' ? '不适用' : runConfig.factor_direction === -1 ? '-1 · 越小越好' : runConfig.factor_direction === 1 ? '+1 · 越大越好' : '按内置公式'} />
+                    <ParameterItem label="回看窗口" value={runConfig.lookback == null ? '不适用' : `${runConfig.lookback} 日`} />
+                    <ParameterItem label="选股股票池" value={runConfig.index_id} />
+                    <ParameterItem label="回测区间" value={`${runConfig.start_date} ~ ${runConfig.end_date}`} />
+                    <ParameterItem label="调仓频率" value={FREQUENCY_LABELS[runConfig.business_summary?.rebalance_frequency || runConfig.rebalance_frequency] || runConfig.business_summary?.rebalance_frequency || runConfig.rebalance_frequency} />
+                    <ParameterItem label="信号滞后" value={`${runConfig.business_summary?.signal_lag_days ?? 1} 个交易日`} />
+                    <ParameterItem label="初始资金" value={`¥ ${fmtMoney(runConfig.initial_capital)}`} />
+                    <ParameterItem label="选股比例" value={runConfig.portfolio_input_mode === 'direct_target_weights' ? '不适用' : fmtPct(runConfig.selection_fraction)} />
+                    <ParameterItem label="权重方法" value={runConfig.portfolio_input_mode === 'direct_target_weights' ? '上传权重原样使用' : WEIGHTING_LABELS[runConfig.weighting_method] || runConfig.weighting_method} />
+                    <ParameterItem label="单票上限" value={runConfig.portfolio_input_mode === 'direct_target_weights' ? '由权重文件决定' : fmtPct(runConfig.max_single_weight)} />
+                  </dl>
+                </div>
+
+                <div className="parameter-group execution-parameters">
+                  <h3>交易与费用</h3>
+                  <dl className="parameter-grid">
+                    <ParameterItem label="成交价格" value={FILL_PRICE_LABELS[runConfig.fill_price_field] || runConfig.fill_price_field} />
+                    <ParameterItem label="滑点" value={`${fmtNum(runConfig.slippage_bps)} bps`} note="嵌入成交价" />
+                    <ParameterItem label="佣金率" value={fmtRate(runConfig.commission_rate)} note="买卖双边" />
+                    <ParameterItem
+                      label="最低佣金"
+                      value={Number.isFinite(runConfig.min_commission) ? `¥ ${fmtMoney(runConfig.min_commission)}` : '未记录'}
+                      note={Number.isFinite(runConfig.min_commission) ? '每笔成交' : '早期任务未冻结该字段'}
+                    />
+                    <ParameterItem
+                      label="印花税"
+                      value={runConfig.stamp_duty_rate == null ? '官方时变费率' : fmtRate(runConfig.stamp_duty_rate)}
+                      note={runConfig.stamp_duty_rate == null ? '仅卖出；2023-08-28 起 0.05%' : '仅卖出'}
+                    />
+                    <ParameterItem
+                      label="过户费"
+                      value={runConfig.transfer_fee_rate == null ? '官方时变费率' : fmtRate(runConfig.transfer_fee_rate)}
+                      note={runConfig.transfer_fee_rate == null ? '2022-04-29 起 0.001%' : null}
+                    />
+                  </dl>
+                </div>
+              </div>
+            )}
           </>
         )
       case 'returns':
         return (
-          <div className="chart-grid">
-            <LineChart data={data[`${run.id}-drawdown`]} title="组合回撤与超额回撤" yLabel="回撤" percentAxis />
-            <BarChart data={data[`${run.id}-monthly`]} title="月度收益" />
-            <BarChart data={data[`${run.id}-annual`]} title="年度收益" />
-            <LineChart data={data[`${run.id}-rolling`]} title="滚动指标 (252日)" yLabel="" />
-          </div>
+          <>
+            {benchmarkToolbar}
+            <div className="chart-grid">
+              <LineChart data={comparisonChart('drawdown')} title="组合回撤与超额回撤" yLabel="回撤" percentAxis />
+              <BarChart data={comparisonChart('monthly')} title="月度收益" />
+              <BarChart data={comparisonChart('annual')} title="年度收益" />
+              <LineChart data={comparisonChart('rolling')} title="滚动指标 (252日)" yLabel="" />
+            </div>
+          </>
         )
       case 'alpha_beta':
         return (
@@ -258,7 +409,7 @@ export default function Dashboard({ run, activeTab }) {
                     </thead>
                     <tbody>
                       {styleSummary.rows.map((row, i) => (
-                        <tr key={i}>{row.map((v, j) => <td key={j}>{typeof v === 'number' ? v.toFixed(3) : String(v)}</td>)}</tr>
+                        <tr key={i}>{row.map((v, j) => <td key={j}>{typeof v === 'number' ? v.toFixed(2) : String(v)}</td>)}</tr>
                       ))}
                     </tbody>
                   </table>
@@ -444,14 +595,15 @@ export default function Dashboard({ run, activeTab }) {
     <div className="view active">
       <div className="result-heading">
         <div>
-          <h1>{run.factor_id} / {run.index_id}</h1>
+          <h1>{run.factor_name || run.factor_id} / {run.index_id}</h1>
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+            {run.factor_name ? `${run.factor_id} · ` : ''}
             {run.start_date} ~ {run.end_date} · {run.rebalance_frequency}
           </span>
         </div>
         <div className="result-state-block">
           <div className={`status-badge ${run.status}`}>{run.status}</div>
-          {run.completed_at && <span style={{ color: 'var(--muted)', fontSize: 11 }}>{run.completed_at}</span>}
+          {run.started_at && <span className="result-timing">耗时 {formatDuration(elapsedSeconds)}</span>}
         </div>
       </div>
 
@@ -460,7 +612,18 @@ export default function Dashboard({ run, activeTab }) {
           <div className="progress-track"><i /></div>
           <div className="progress-detail">
             <strong>{run.status === 'running' ? '正在运行回测...' : '等待执行...'}</strong>
+            <span>{run.status === 'running'
+              ? `已运行 ${formatDuration(elapsedSeconds)}`
+              : `已排队 ${formatDuration((now - Date.parse(run.created_at)) / 1000)}`}</span>
           </div>
+          <button className="danger-button" type="button" onClick={() => onCancel(run.id)}>取消回测</button>
+        </div>
+      )}
+
+      {run.status === 'cancelled' && (
+        <div className="cancelled-panel">
+          <strong>回测已取消</strong>
+          <span>{run.started_at ? `运行耗时 ${formatDuration(run.elapsed_seconds)}` : '任务在排队阶段取消'}</span>
         </div>
       )}
 

@@ -304,6 +304,7 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
                 <div className="parameter-group">
                   <h3>策略与组合</h3>
                   <dl className="parameter-grid">
+                    <ParameterItem label="提交人" value={run.owner_username || (run.owner_user_id == null ? '未记录' : `用户 #${run.owner_user_id}`)} />
                     <ParameterItem label="因子" value={run.factor_name || run.factor_id} note={run.factor_name ? run.factor_id : null} />
                     <ParameterItem label="组合输入" value={runConfig.portfolio_input_mode === 'direct_target_weights' ? '直接目标权重' : '因子分数'} />
                     <ParameterItem label="因子来源" value={FACTOR_SOURCE_LABELS[runConfig.factor_source] || runConfig.factor_source} />

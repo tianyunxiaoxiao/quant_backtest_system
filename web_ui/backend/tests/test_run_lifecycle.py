@@ -151,6 +151,16 @@ class RunLifecycleTest(unittest.TestCase):
             {"alice-run", "bob-run"},
         )
 
+    def test_run_output_records_submitter(self) -> None:
+        record = self.create_run(
+            "alice-run", owner_user_id=7, owner_username="alice"
+        )
+
+        output = _record_to_out(record)
+
+        self.assertEqual(output["owner_user_id"], 7)
+        self.assertEqual(output["owner_username"], "alice")
+
 
 if __name__ == "__main__":
     unittest.main()

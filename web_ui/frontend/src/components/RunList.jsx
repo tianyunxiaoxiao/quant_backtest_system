@@ -29,6 +29,9 @@ const timingText = (run, now) => {
   return null
 }
 
+const submitterText = (run) => run.owner_username ||
+  (run.owner_user_id == null ? '未记录' : `用户 #${run.owner_user_id}`)
+
 export default function RunList({ runs, selectedId, onSelect, onRefresh, onDelete, onCancel, now }) {
   return (
     <aside className="run-sidebar">
@@ -59,6 +62,10 @@ export default function RunList({ runs, selectedId, onSelect, onRefresh, onDelet
               <div className="run-meta">
                 <span>{run.start_date} ~ {run.end_date}</span>
                 <span>{run.rebalance_frequency}</span>
+              </div>
+              <div className="run-meta">
+                <span>提交人</span>
+                <span title={submitterText(run)}>{submitterText(run)}</span>
               </div>
               {timingText(run, now) && <div className="run-timing">{timingText(run, now)}</div>}
             </button>

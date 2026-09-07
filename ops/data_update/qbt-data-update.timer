@@ -1,0 +1,11 @@
+[Unit]
+Description=Update shared QPF/QBT market data after each CN trading day
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 18:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=5min
+Unit=qbt-data-update.service
+
+[Install]
+WantedBy=timers.target

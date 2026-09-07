@@ -28,6 +28,8 @@
 - `/etc/qpf/rqdata.env` 权限必须为 `0600`，仅包含 `RQDATAC_CONF`。
 - QBT 容器应挂载 `/data/research:/data/research:ro`，并设置
   `QBT_WAREHOUSE=/data/research/current/warehouse_rqdata`。
+- `ops/data_update/qbt-web-data-release.conf` 是当前生产镜像对应的 systemd drop-in；升级
+  QBT 镜像时必须同步修改其中的镜像标签。
 - 定时器使用的 `QBT_DATA_IMAGE` 必须与当前 QBT 服务镜像一致。
 - 发布前脚本会查询 QBT SQLite 与 QPF PostgreSQL，任一平台存在非终态任务时拒绝发布。
 

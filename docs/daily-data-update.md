@@ -44,3 +44,14 @@ journalctl -u qbt-data-update.service -n 200 --no-pager
 
 手动运行 `systemctl start qbt-data-update.service` 与定时流程完全相同。首次部署或变更挂载时，
 应在无运行任务的窗口重启 `qbt-web.service`，并检查两个平台报告的 `date_max` 一致。
+
+## RQData 登录额度
+
+若日志出现 `QuotaExceeded: login machine num exceeds`，说明 RQData 许可证已占满允许的机器数。
+此时必须保持 timer 禁用，先在 RQData 管理端释放旧机器或增加额度，再在 ECS 执行一次只读
+`get_latest_trading_date` 验证。验证成功后使用以下命令启用：
+
+```bash
+systemctl enable --now qbt-data-update.timer
+systemctl list-timers qbt-data-update.timer --no-pager
+```

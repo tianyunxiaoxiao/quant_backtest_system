@@ -3,6 +3,8 @@ Description=Build and atomically publish the shared QPF/QBT daily dataset
 After=docker.service network-online.target qpf-worker.service
 Wants=network-online.target
 Requires=docker.service
+StartLimitIntervalSec=3h
+StartLimitBurst=4
 
 [Service]
 Type=oneshot
@@ -12,8 +14,6 @@ ExecStart=/opt/qpf/venv/bin/python /opt/qbt/app/ops/data_update/daily_update.py
 Restart=on-failure
 RestartSec=15min
 TimeoutStartSec=6h
-StartLimitIntervalSec=3h
-StartLimitBurst=4
 
 [Install]
 WantedBy=multi-user.target

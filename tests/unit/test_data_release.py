@@ -30,6 +30,8 @@ def test_fetch_benchmarks_uses_one_complete_calendar(tmp_path: Path) -> None:
     )
     assert {item["benchmark_id"] for item in manifest["benchmarks"]} == set(BENCHMARKS)
     assert all(item["date_max"] == "2026-09-03" for item in manifest["benchmarks"])
+    assert (tmp_path / "benchmarks").stat().st_mode & 0o777 == 0o755
+    assert all(path.stat().st_mode & 0o777 == 0o644 for path in (tmp_path / "benchmarks").iterdir())
 
 
 def _release(root: Path) -> None:

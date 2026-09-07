@@ -101,6 +101,9 @@ def fetch_benchmarks(
         (stage / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        for path in stage.iterdir():
+            path.chmod(0o644)
+        stage.chmod(0o755)
         backup = output_dir.with_name(f".{output_dir.name}.previous")
         if backup.exists():
             shutil.rmtree(backup)

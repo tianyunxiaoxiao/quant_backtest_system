@@ -23,6 +23,12 @@
    与日线面板一致。
 9. 候选目录重命名为不可变 release，确认 QBT 与 QPF 都没有非终态任务后，最后一次
    `os.replace` 切换 `current`。若平台仍忙，完整候选保留到下次重试直接校验和发布。
+10. 发布成功后，systemd 通过 `OnSuccess` 启动 `qpf-factor-values-refresh.service`。该服务只选择
+    完整相关性审核中 `hidden=false` 的活跃代码因子，按日频或 5 分钟数据各自的最新日期幂等
+    重跑；上传文件型因子因缺少可执行代码会记录为跳过。
+11. 仅当存在待更新因子时，刷新服务会短暂重启 `qpf-task-api.service`，使因子平台立即读取新的
+    `/data/research/current` 指向；随后任务由现有 worker 队列执行。每个数据日期最多自动尝试
+    三次，批次清单写入 `/data/qpf/batches/factor-refresh-YYYY-MM-DD.json`。
 
 失败的 `.partial` 候选目录会被自动清理。发布完成后自动保留 `current` 与 `previous` 指向的
 两个 `full-v1` 版本，清理更早的 `full-v1`，避免 5 分钟 HDF5 的写时复制持续占满数据盘；
@@ -47,6 +53,7 @@
 ```bash
 systemctl status qbt-data-update.timer
 journalctl -u qbt-data-update.service -n 200 --no-pager
+journalctl -u qpf-factor-values-refresh.service -n 200 --no-pager
 /opt/qpf/venv/bin/python /opt/qbt/app/scripts/validate_data_release.py \
   --release /data/research/current
 ```

@@ -1,0 +1,19 @@
+[Unit]
+Description=Refresh reviewed non-correlated QPF factor values after data publication
+After=qbt-data-update.service qpf-worker.service postgresql.service
+Requires=qpf-worker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/qpf/app
+EnvironmentFile=/etc/qpf/qpf.env
+ExecStart=/opt/qpf/venv/bin/python /opt/qbt/app/ops/data_update/refresh_factor_values.py --restart-service qpf-task-api.service
+Restart=on-failure
+RestartSec=15min
+TimeoutStartSec=30min
+Nice=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/data /run/systemd /var/log/qpf

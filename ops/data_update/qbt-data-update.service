@@ -3,6 +3,7 @@ Description=Build and atomically publish shared QPF/QBT daily and 5-minute data
 After=docker.service network-online.target qpf-worker.service
 Wants=network-online.target
 Requires=docker.service
+OnSuccess=qpf-factor-values-refresh.service
 StartLimitIntervalSec=3h
 StartLimitBurst=4
 

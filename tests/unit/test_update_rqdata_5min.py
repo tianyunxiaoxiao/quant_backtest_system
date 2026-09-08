@@ -97,7 +97,12 @@ def test_update_minbars_breaks_hardlink_before_appending(tmp_path: Path) -> None
     panel.write_text(json.dumps({"tickers": ["000001.SZ"]}))
 
     result = update_five_minute_dataset(
-        candidate, panel, end_date=date(2026, 9, 2), client=FakeRQData(), batch_size=10
+        candidate,
+        panel,
+        end_date=date(2026, 9, 2),
+        client=FakeRQData(),
+        batch_size=10,
+        workers=1,
     )
 
     with h5py.File(original, "r") as handle:

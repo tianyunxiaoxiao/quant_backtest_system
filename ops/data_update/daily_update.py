@@ -119,6 +119,8 @@ def build_release(args: argparse.Namespace, target_date: date, env: dict[str, st
             target_date.isoformat(),
             "--batch-size",
             str(args.minbar_batch_size),
+            "--workers",
+            str(args.minbar_workers),
         ],
         env=env,
     )

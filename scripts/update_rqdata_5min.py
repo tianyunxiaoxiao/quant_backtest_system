@@ -7,10 +7,12 @@ import argparse
 import csv
 import hashlib
 import json
+import multiprocessing
 import os
 import sys
 import time
 import uuid
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -108,7 +110,7 @@ def _frame_arrays(frame: pd.DataFrame, ticker: str) -> tuple[np.ndarray, np.ndar
     return data, index
 
 
-def _write_file(path: Path, new_data: np.ndarray, new_index: np.ndarray) -> None:
+def _write_file(path: Path, new_data: np.ndarray, new_index: np.ndarray) -> bool:
     old_data = np.empty(0, DATA_DTYPE)
     old_index = np.empty(0, INDEX_DTYPE)
     data_settings: dict[str, Any] = {"maxshape": (None,), "chunks": True}
@@ -127,7 +129,7 @@ def _write_file(path: Path, new_data: np.ndarray, new_index: np.ndarray) -> None
             new_index = new_index[first:]
             new_data = new_data[first * BARS_PER_DAY :]
     if not len(new_index):
-        return
+        return False
     shifted = new_index.copy()
     shifted["line_no"] -= shifted["line_no"][0]
     shifted["line_no"] += len(old_data)
@@ -145,6 +147,11 @@ def _write_file(path: Path, new_data: np.ndarray, new_index: np.ndarray) -> None
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+    return True
+
+
+def _write_task(task: tuple[Path, np.ndarray, np.ndarray]) -> bool:
+    return _write_file(*task)
 
 
 def _split_result(frame: pd.DataFrame, ids: list[str]) -> dict[str, pd.DataFrame]:
@@ -192,6 +199,7 @@ def update_five_minute_dataset(
     end_date: date,
     client: Any,
     batch_size: int = 50,
+    workers: int = 8,
     retry_attempts: int = 12,
     retry_delay: float = 10.0,
 ) -> dict[str, Any]:
@@ -203,36 +211,48 @@ def update_five_minute_dataset(
     equities = root / "equities"
     equities.mkdir(parents=True, exist_ok=True)
 
+    if workers < 1:
+        raise ValueError("workers must be positive")
     updated = 0
     ids = [rq_ticker(ticker) for ticker in tickers]
-    for offset in range(0, len(ids), batch_size):
-        batch = ids[offset : offset + batch_size]
-        result = _get_price_with_retry(
-            client,
-            attempts=retry_attempts,
-            retry_delay=retry_delay,
-            order_book_ids=batch,
-            start_date=start_date,
-            end_date=end_date,
-            frequency="5m",
-            fields=list(FIELDS),
-            adjust_type="none",
-            skip_suspended=False,
-            expect_df=True,
-            market="cn",
-        )
-        frames = _split_result(result, batch)
-        for ticker, order_book_id in zip(tickers[offset : offset + batch_size], batch):
-            frame = frames.get(order_book_id)
-            if frame is None or frame.empty:
-                continue
-            data, index = _frame_arrays(frame, ticker)
-            path = equities / filename(ticker)
-            before = path.stat().st_mtime_ns if path.exists() else None
-            _write_file(path, data, index)
-            if before is None or path.stat().st_mtime_ns != before:
-                updated += 1
-        print(f"5m batches: {min(offset + batch_size, len(ids))}/{len(ids)}", flush=True)
+    executor = (
+        ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"))
+        if workers > 1
+        else None
+    )
+    try:
+        for offset in range(0, len(ids), batch_size):
+            batch = ids[offset : offset + batch_size]
+            result = _get_price_with_retry(
+                client,
+                attempts=retry_attempts,
+                retry_delay=retry_delay,
+                order_book_ids=batch,
+                start_date=start_date,
+                end_date=end_date,
+                frequency="5m",
+                fields=list(FIELDS),
+                adjust_type="none",
+                skip_suspended=False,
+                expect_df=True,
+                market="cn",
+            )
+            frames = _split_result(result, batch)
+            tasks: list[tuple[Path, np.ndarray, np.ndarray]] = []
+            for ticker, order_book_id in zip(tickers[offset : offset + batch_size], batch):
+                frame = frames.get(order_book_id)
+                if frame is None or frame.empty:
+                    continue
+                data, index = _frame_arrays(frame, ticker)
+                tasks.append((equities / filename(ticker), data, index))
+            if executor is None:
+                updated += sum(_write_task(task) for task in tasks)
+            else:
+                updated += sum(executor.map(_write_task, tasks))
+            print(f"5m batches: {min(offset + batch_size, len(ids))}/{len(ids)}", flush=True)
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=False)
 
     records: list[FileRecord] = []
     for path in sorted(equities.glob("*.h5")):
@@ -280,6 +300,7 @@ def main() -> int:
     parser.add_argument("--panel-metadata", type=Path, required=True)
     parser.add_argument("--end-date", type=date.fromisoformat, required=True)
     parser.add_argument("--batch-size", type=int, default=50)
+    parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--retry-attempts", type=int, default=12)
     parser.add_argument("--retry-delay", type=float, default=10.0)
     args = parser.parse_args()
@@ -292,6 +313,7 @@ def main() -> int:
         end_date=args.end_date,
         client=rqdatac,
         batch_size=args.batch_size,
+        workers=args.workers,
         retry_attempts=args.retry_attempts,
         retry_delay=args.retry_delay,
     )

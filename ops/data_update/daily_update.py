@@ -18,9 +18,12 @@ from pathlib import Path
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> str:
     print("+", " ".join(command), flush=True)
-    completed = subprocess.run(command, check=True, text=True, capture_output=True, env=env)
+    completed = subprocess.run(command, text=True, capture_output=True, env=env)
     if completed.stdout:
         print(completed.stdout.rstrip(), flush=True)
+    if completed.stderr:
+        print(completed.stderr.rstrip(), file=sys.stderr, flush=True)
+    completed.check_returncode()
     return completed.stdout
 
 

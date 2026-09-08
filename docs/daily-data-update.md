@@ -12,8 +12,7 @@
 2. 取最近交易日的前一交易日为统一目标，并检查 RQData `stock_daybar`、`stock_minbar` 与
    `exchange_index_daybar` 均已就绪。因估值、换手率等因子字段晚于收盘行情更新，统一保留
    一个交易日滞后，避免发布“有价格、无因子”的半成品。
-3. 获取文件锁并确认 QBT 没有待运行或运行中的任务。QPF worker 在任务启动时把 release 解析为
-   具体不可变目录，因此已有 QPF 任务可继续读取旧版，不阻塞新版本构建和切换。
+3. 获取文件锁，确认 QBT 与 QPF 都没有待运行或运行中的任务。
 4. 以当前不可变版本为硬链接基础创建 `.partial` 候选目录。
 5. 用 7 个交易日重叠窗口更新全部 31 个股票字段。
 6. 从 RQData 批量增量获取全部 A 股不复权 5 分钟数据，逐文件写入临时文件后原子替换；再用
@@ -40,8 +39,7 @@
 - `ops/data_update/qbt-web-data-release.conf` 是当前生产镜像对应的 systemd drop-in；升级
   QBT 镜像时必须同步修改其中的镜像标签。
 - 定时器使用的 `QBT_DATA_IMAGE` 必须与当前 QBT 服务镜像一致。
-- 发布前脚本会查询 QBT SQLite，存在非终态回测时拒绝发布。QPF 任务固定挂载其启动时的
-  release，不受后续 `current` symlink 切换影响。
+- 发布前脚本会查询 QBT SQLite 与 QPF PostgreSQL，任一平台存在非终态任务时拒绝发布。
 
 ## 手动检查
 

@@ -57,6 +57,15 @@ def active_qbt_runs(database: Path) -> int:
         )
 
 
+def active_qpf_runs(database: str) -> int:
+    query = (
+        "SELECT count(*) FROM runs WHERE status NOT IN "
+        "('succeeded','failed','cancelled','timed_out')"
+    )
+    value = run(["sudo", "-u", "postgres", "psql", "-d", database, "-Atc", query])
+    return int(value.strip())
+
+
 def build_release(args: argparse.Namespace, target_date: date, env: dict[str, str]) -> Path:
     current = args.current.resolve(strict=True)
     version = f"rqdata-a-share-{target_date:%Y%m%d}-full-v1"
@@ -234,6 +243,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--qbt-image", default=os.getenv("QBT_DATA_IMAGE", "qbt-web:latest"))
     result.add_argument("--qbt-database", type=Path, default=Path("/data/qbt/state/qbt_web.db"))
+    result.add_argument("--qpf-database", default="qpf")
     result.add_argument("--cache-dir", type=Path, default=Path("/data/research/rqdata_cache"))
     result.add_argument("--lock-file", type=Path, default=Path("/run/lock/qbt-data-update.lock"))
     result.add_argument("--start-date", type=date.fromisoformat, default=date(2019, 1, 2))
@@ -271,6 +281,9 @@ def main() -> int:
         active = active_qbt_runs(args.qbt_database)
         if active:
             raise RuntimeError(f"refusing publication while {active} QBT runs are active")
+        active = active_qpf_runs(args.qpf_database)
+        if active:
+            raise RuntimeError(f"refusing publication while {active} QPF runs are active")
         version = f"rqdata-a-share-{target:%Y%m%d}-full-v1"
         try:
             release = build_release(args, target, env)

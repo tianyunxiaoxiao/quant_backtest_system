@@ -9,15 +9,23 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from scripts.update_rqdata_5min import BAR_HHMM, DATA_DTYPE, INDEX_DTYPE, update_five_minute_dataset
+from scripts.update_rqdata_5min import (
+    BAR_HHMM,
+    DATA_DTYPE,
+    INDEX_DTYPE,
+    _get_price_with_retry,
+    update_five_minute_dataset,
+)
 
 
 class FakeRQData:
-    def get_price(self, ids, **kwargs):
+    def get_price(self, order_book_ids, **kwargs):
         stamps = pd.DatetimeIndex(
             [pd.Timestamp(2026, 9, 2, value // 100, value % 100) for value in BAR_HHMM]
         )
-        index = pd.MultiIndex.from_product([[ids[0]], stamps], names=["order_book_id", "datetime"])
+        index = pd.MultiIndex.from_product(
+            [[order_book_ids[0]], stamps], names=["order_book_id", "datetime"]
+        )
         return pd.DataFrame(
             {
                 "open": 10.0,
@@ -30,6 +38,33 @@ class FakeRQData:
             },
             index=index,
         )
+
+
+class FlakyRQData:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.resets = 0
+        self.initializations = 0
+
+    def get_price(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            error_type = type("QuotaExceeded", (Exception,), {})
+            raise error_type("connection number exceeds")
+        return pd.DataFrame({"close": [1.0]})
+
+    def reset(self) -> None:
+        self.resets += 1
+
+    def init(self) -> None:
+        self.initializations += 1
+
+
+def test_transient_rqdata_error_resets_connection_and_retries() -> None:
+    client = FlakyRQData()
+    result = _get_price_with_retry(client, attempts=2, retry_delay=0, order_book_ids=["x"])
+    assert not result.empty
+    assert (client.calls, client.resets, client.initializations) == (2, 1, 1)
 
 
 def _seed(root: Path) -> Path:

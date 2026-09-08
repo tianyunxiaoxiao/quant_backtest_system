@@ -8,6 +8,8 @@ import csv
 import hashlib
 import json
 import os
+import sys
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -155,6 +157,34 @@ def _split_result(frame: pd.DataFrame, ids: list[str]) -> dict[str, pd.DataFrame
     return {str(key): value.droplevel(0) for key, value in frame.groupby(level=0, sort=False)}
 
 
+def _get_price_with_retry(
+    client: Any, *, attempts: int, retry_delay: float, **kwargs: Any
+) -> pd.DataFrame:
+    for attempt in range(1, attempts + 1):
+        try:
+            return client.get_price(**kwargs)
+        except Exception as error:
+            name = type(error).__name__.lower()
+            transient = any(token in name for token in ("connection", "network", "quota", "timeout"))
+            if not transient or attempt == attempts:
+                raise
+            delay = min(retry_delay * attempt, 120.0)
+            print(
+                f"RQData 5m batch attempt {attempt}/{attempts} failed: {error}; "
+                f"retrying in {delay:.0f}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            reset = getattr(client, "reset", None)
+            if reset is not None:
+                reset()
+            time.sleep(delay)
+            initialize = getattr(client, "init", None)
+            if initialize is not None:
+                initialize()
+    raise AssertionError("unreachable")
+
+
 def update_five_minute_dataset(
     root: Path,
     panel_metadata: Path,
@@ -162,6 +192,8 @@ def update_five_minute_dataset(
     end_date: date,
     client: Any,
     batch_size: int = 50,
+    retry_attempts: int = 12,
+    retry_delay: float = 10.0,
 ) -> dict[str, Any]:
     metadata_path = root / "metadata.json"
     old_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -175,8 +207,11 @@ def update_five_minute_dataset(
     ids = [rq_ticker(ticker) for ticker in tickers]
     for offset in range(0, len(ids), batch_size):
         batch = ids[offset : offset + batch_size]
-        result = client.get_price(
-            batch,
+        result = _get_price_with_retry(
+            client,
+            attempts=retry_attempts,
+            retry_delay=retry_delay,
+            order_book_ids=batch,
             start_date=start_date,
             end_date=end_date,
             frequency="5m",
@@ -245,12 +280,20 @@ def main() -> int:
     parser.add_argument("--panel-metadata", type=Path, required=True)
     parser.add_argument("--end-date", type=date.fromisoformat, required=True)
     parser.add_argument("--batch-size", type=int, default=50)
+    parser.add_argument("--retry-attempts", type=int, default=12)
+    parser.add_argument("--retry-delay", type=float, default=10.0)
     args = parser.parse_args()
     import rqdatac
 
     rqdatac.init()
     result = update_five_minute_dataset(
-        args.root, args.panel_metadata, end_date=args.end_date, client=rqdatac, batch_size=args.batch_size
+        args.root,
+        args.panel_metadata,
+        end_date=args.end_date,
+        client=rqdatac,
+        batch_size=args.batch_size,
+        retry_attempts=args.retry_attempts,
+        retry_delay=args.retry_delay,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

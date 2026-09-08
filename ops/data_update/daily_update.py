@@ -38,7 +38,7 @@ def latest_ready_date(python: Path, env: dict[str, str]) -> date:
         "import rqdatac; rqdatac.init(); "
         "latest=rqdatac.get_latest_trading_date(market='cn'); "
         "d=rqdatac.get_previous_trading_date(latest, market='cn'); "
-        "r=rqdatac.is_data_ready(categories=['stock_daybar','exchange_index_daybar'], "
+        "r=rqdatac.is_data_ready(categories=['stock_daybar','stock_minbar','exchange_index_daybar'], "
         "expected_date=d, market='cn'); "
         "assert bool(r['ready'].all()), r.to_string(); print(d.isoformat())"
     )
@@ -68,10 +68,20 @@ def active_qpf_runs(database: str) -> int:
 
 def build_release(args: argparse.Namespace, target_date: date, env: dict[str, str]) -> Path:
     current = args.current.resolve(strict=True)
-    version = f"rqdata-a-share-{target_date:%Y%m%d}-daily-v1"
+    version = f"rqdata-a-share-{target_date:%Y%m%d}-full-v1"
     final = args.datasets / version
     if final.exists():
-        raise FileExistsError(f"immutable release already exists: {final}")
+        run(
+            [
+                str(args.python),
+                str(args.validator_script),
+                "--release",
+                str(final),
+                "--expected-end",
+                target_date.isoformat(),
+            ]
+        )
+        return final
     partial = args.datasets / f".{version}.partial-{uuid.uuid4().hex[:8]}"
     print(json.dumps({"stage": "copy", "source": str(current), "candidate": str(partial)}))
     hardlink_tree(current, partial)
@@ -93,6 +103,35 @@ def build_release(args: argparse.Namespace, target_date: date, env: dict[str, st
             target_date.isoformat(),
         ],
         env=update_env,
+    )
+    run(
+        [
+            str(args.python),
+            str(args.minbar_update_script),
+            "--root",
+            str(partial / "5minbar_unadjusted"),
+            "--panel-metadata",
+            str(partial / "panel_shards" / "metadata.json"),
+            "--end-date",
+            target_date.isoformat(),
+            "--batch-size",
+            str(args.minbar_batch_size),
+        ],
+        env=env,
+    )
+    run(
+        [
+            str(args.python),
+            str(args.minbar_adjust_script),
+            "--raw-root",
+            str(partial / "5minbar_unadjusted"),
+            "--panel-shards",
+            str(partial / "panel_shards"),
+            "--output-root",
+            str(partial / "5minbar_post"),
+            "--workers",
+            str(args.minbar_workers),
+        ]
     )
     run(
         [
@@ -162,6 +201,16 @@ def publish(current: Path, release: Path) -> None:
     os.replace(temp_current, current)
 
 
+def prune_superseded_full_releases(current: Path, datasets: Path) -> None:
+    protected = {current.resolve(strict=True)}
+    previous = current.with_name("previous")
+    if previous.exists():
+        protected.add(previous.resolve(strict=True))
+    for release in datasets.glob("rqdata-a-share-*-full-v1"):
+        if release.resolve() not in protected:
+            shutil.rmtree(release)
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--current", type=Path, default=Path("/data/research/current"))
@@ -178,6 +227,16 @@ def parser() -> argparse.ArgumentParser:
         default=Path("/opt/qbt/app/scripts/fetch_rqdata_benchmarks.py"),
     )
     result.add_argument(
+        "--minbar-update-script",
+        type=Path,
+        default=Path("/opt/qbt/app/scripts/update_rqdata_5min.py"),
+    )
+    result.add_argument(
+        "--minbar-adjust-script",
+        type=Path,
+        default=Path("/opt/qpf/app/scripts/build_adjusted_5minbar.py"),
+    )
+    result.add_argument(
         "--validator-script",
         type=Path,
         default=Path("/opt/qbt/app/scripts/validate_data_release.py"),
@@ -188,6 +247,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--cache-dir", type=Path, default=Path("/data/research/rqdata_cache"))
     result.add_argument("--lock-file", type=Path, default=Path("/run/lock/qbt-data-update.lock"))
     result.add_argument("--start-date", type=date.fromisoformat, default=date(2019, 1, 2))
+    result.add_argument("--minbar-batch-size", type=int, default=50)
+    result.add_argument("--minbar-workers", type=int, default=8)
     result.add_argument("--target-date", type=date.fromisoformat)
     result.add_argument("--build-only", action="store_true")
     return result
@@ -205,12 +266,17 @@ def main() -> int:
             return 75
         env = os.environ.copy()
         target = args.target_date or latest_ready_date(args.python, env)
-        panel_meta = json.loads(
-            (args.current.resolve() / "panel_shards" / "metadata.json").read_text()
-        )
-        current_end = date.fromisoformat(panel_meta["dates"][-1][:10])
-        if current_end >= target:
-            print(json.dumps({"status": "current", "date": current_end.isoformat()}))
+        current_release = args.current.resolve()
+        panel_meta = json.loads((current_release / "panel_shards" / "metadata.json").read_text())
+        raw_meta = json.loads((current_release / "5minbar_unadjusted" / "metadata.json").read_text())
+        post_meta = json.loads((current_release / "5minbar_post" / "metadata.json").read_text())
+        component_ends = {
+            "daily": date.fromisoformat(panel_meta["dates"][-1][:10]),
+            "5min_raw": date.fromisoformat(raw_meta["end_date"]),
+            "5min_post": date.fromisoformat(post_meta["end_date"]),
+        }
+        if min(component_ends.values()) >= target:
+            print(json.dumps({"status": "current", "date": target.isoformat(), "components": {key: str(value) for key, value in component_ends.items()}}))
             return 0
         active = active_qbt_runs(args.qbt_database)
         if active:
@@ -218,9 +284,16 @@ def main() -> int:
         active = active_qpf_runs(args.qpf_database)
         if active:
             raise RuntimeError(f"refusing publication while {active} QPF runs are active")
-        release = build_release(args, target, env)
+        version = f"rqdata-a-share-{target:%Y%m%d}-full-v1"
+        try:
+            release = build_release(args, target, env)
+        except Exception:
+            for partial in args.datasets.glob(f".{version}.partial-*"):
+                shutil.rmtree(partial)
+            raise
         if not args.build_only:
             publish(args.current, release)
+            prune_superseded_full_releases(args.current, args.datasets)
         print(
             json.dumps(
                 {

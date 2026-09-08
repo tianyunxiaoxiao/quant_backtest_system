@@ -1,5 +1,5 @@
 [Unit]
-Description=Build and atomically publish the shared QPF/QBT daily dataset
+Description=Build and atomically publish shared QPF/QBT daily and 5-minute data
 After=docker.service network-online.target qpf-worker.service
 Wants=network-online.target
 Requires=docker.service

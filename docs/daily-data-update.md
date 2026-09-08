@@ -3,21 +3,29 @@
 ## 目标
 
 因子平台和回测平台共同读取 `/data/research/current` 指向的不可变数据版本。因子平台读取
-`panel_shards`，回测平台读取同一版本中的 `warehouse_rqdata`。一次 symlink 替换同时发布
-两边数据，避免股票、全 A 等权和三个指数基准出现日期错位。
+`panel_shards` 和 `5minbar_post`，回测平台读取同一版本中的 `warehouse_rqdata`。一次 symlink
+替换同时发布两边数据，避免日线、5 分钟线、全 A 等权和三个指数基准出现日期错位。
 
 ## 每日流程
 
 1. 工作日 18:30（Asia/Shanghai）由 `qbt-data-update.timer` 触发。
-2. 取最近交易日的前一交易日为统一目标，并检查 RQData `stock_daybar` 与
+2. 取最近交易日的前一交易日为统一目标，并检查 RQData `stock_daybar`、`stock_minbar` 与
    `exchange_index_daybar` 均已就绪。因估值、换手率等因子字段晚于收盘行情更新，统一保留
    一个交易日滞后，避免发布“有价格、无因子”的半成品。
 3. 获取文件锁，确认 QBT 与 QPF 都没有待运行或运行中的任务。
 4. 以当前不可变版本为硬链接基础创建 `.partial` 候选目录。
 5. 用 7 个交易日重叠窗口更新全部 31 个股票字段。
-6. 从同一 panel 重建回测仓库，并从 RQData 更新沪深 300、中证 500、中证 1000。
-7. 校验全部 panel 字段、回测交易日历和三个指数都完整覆盖目标交易日，并校验内容哈希。
-8. 候选目录重命名为不可变 release，最后一次 `os.replace` 切换 `current`。
+6. 从 RQData 批量增量获取全部 A 股不复权 5 分钟数据，逐文件写入临时文件后原子替换；再用
+   同版日线后复权收盘价重建 `5minbar_post`。
+7. 从同一 panel 重建回测仓库，并从 RQData 更新沪深 300、中证 500、中证 1000。
+8. 校验全部 panel 字段、回测交易日历和三个指数都完整覆盖目标交易日，并校验内容哈希；对
+   当日有效股票逐只校验 raw/post 数据均为 48 根且时点完整，同时要求 post 的 15:00 收盘
+   与日线面板一致。
+9. 候选目录重命名为不可变 release，最后一次 `os.replace` 切换 `current`。
+
+失败的 `.partial` 候选目录会被自动清理。发布完成后自动保留 `current` 与 `previous` 指向的
+两个 `full-v1` 版本，清理更早的 `full-v1`，避免 5 分钟 HDF5 的写时复制持续占满数据盘；
+既有的旧命名历史版本不在自动清理范围内。
 
 任何步骤失败都不会修改 `current`。systemd 每 15 分钟重试，最多四次；日志使用
 `journalctl -u qbt-data-update.service` 查看。`/data/research/previous` 保存发布前版本，回滚时先

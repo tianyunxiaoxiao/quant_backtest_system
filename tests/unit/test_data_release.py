@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
+import h5py
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -40,7 +43,7 @@ def _release(root: Path) -> None:
     field = panel / "fields" / "close"
     field.mkdir(parents=True)
     part = field / "year=2026.parquet"
-    pd.DataFrame({"000001.XSHE": [1.0, 2.0, 3.0]}, index=dates).to_parquet(part)
+    pd.DataFrame({"000001.SZ": [1.0, 2.0, 3.0]}, index=dates).to_parquet(part)
     panel_hash = "sha256:panel"
     (panel / "metadata.json").write_text(
         json.dumps(
@@ -87,6 +90,54 @@ def _release(root: Path) -> None:
             }
         )
     (benchmarks / "manifest.json").write_text(json.dumps({"benchmarks": items}))
+    data_dtype = np.dtype(
+        [
+            ("datetime", "<i8"), ("open", "<f8"), ("high", "<f8"),
+            ("low", "<f8"), ("close", "<f8"), ("volume", "<f8"),
+            ("total_turnover", "<f8"), ("num_trades", "<u8"),
+        ]
+    )
+    index_dtype = np.dtype([("date", "<i4"), ("line_no", "<u4")])
+    for name, basis in (("5minbar_unadjusted", "raw_unadjusted"), ("5minbar_post", "post_adjusted")):
+        minute_root = root / name
+        equities = minute_root / "equities"
+        equities.mkdir(parents=True)
+        minute_path = equities / "000001.XSHE.h5"
+        values = np.zeros(48, dtype=data_dtype)
+        hhmm = np.array(
+            [
+                *range(935, 960, 5), *range(1000, 1060, 5), *range(1100, 1131, 5),
+                *range(1305, 1360, 5), *range(1400, 1460, 5), 1500,
+            ]
+        )
+        values["datetime"] = 20260903000000 + hhmm * 100
+        values["close"] = 3.0
+        index = np.array([(20260903, 0)], dtype=index_dtype)
+        with h5py.File(minute_path, "w") as handle:
+            handle.create_dataset("data", data=values)
+            handle.create_dataset("index", data=index)
+        manifest = minute_root / "manifest.csv"
+        manifest.write_text("filename\n000001.XSHE.h5\n")
+        manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        (minute_root / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "end_date": "2026-09-03",
+                    "manifest": "manifest.csv",
+                    "manifest_sha256": manifest_hash,
+                    "content_hash": f"sha256:{manifest_hash}",
+                    "file_count": 1,
+                    "stored_price_basis": basis,
+                    "source_dataset": {"content_hash": "placeholder"},
+                    "daily_adjustment_source": {"content_hash": panel_hash},
+                }
+            )
+        )
+    raw_meta = json.loads((root / "5minbar_unadjusted/metadata.json").read_text())
+    post_path = root / "5minbar_post/metadata.json"
+    post_meta = json.loads(post_path.read_text())
+    post_meta["source_dataset"]["content_hash"] = raw_meta["content_hash"]
+    post_path.write_text(json.dumps(post_meta))
 
 
 def test_validate_release_rejects_missing_benchmark_date(tmp_path: Path) -> None:

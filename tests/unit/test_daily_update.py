@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ops.data_update.daily_update import prune_superseded_full_releases, publish
+from ops.data_update.daily_update import publish
 
 
-def test_publish_and_prune_keep_current_previous_and_legacy(tmp_path: Path) -> None:
+def test_publish_preserves_all_releases(tmp_path: Path) -> None:
     datasets = tmp_path / "datasets"
     datasets.mkdir()
     old = datasets / "rqdata-a-share-20260901-full-v1"
@@ -21,11 +21,10 @@ def test_publish_and_prune_keep_current_previous_and_legacy(tmp_path: Path) -> N
     os.symlink(old, previous)
 
     publish(current, next_release)
-    prune_superseded_full_releases(current, datasets)
 
     assert current.resolve() == next_release
     assert previous.resolve() == current_release
-    assert not old.exists()
+    assert old.exists()
     assert current_release.exists()
     assert next_release.exists()
     assert legacy.exists()

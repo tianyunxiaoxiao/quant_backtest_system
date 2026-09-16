@@ -221,16 +221,6 @@ def publish(current: Path, release: Path) -> None:
     os.replace(temp_current, current)
 
 
-def prune_superseded_full_releases(current: Path, datasets: Path) -> None:
-    protected = {current.resolve(strict=True)}
-    previous = current.with_name("previous")
-    if previous.exists():
-        protected.add(previous.resolve(strict=True))
-    for release in datasets.glob("rqdata-a-share-*-full-v1"):
-        if release.resolve() not in protected:
-            shutil.rmtree(release)
-
-
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--current", type=Path, default=Path("/data/research/current"))
@@ -303,13 +293,7 @@ def main() -> int:
         if min(component_ends.values()) >= target:
             print(json.dumps({"status": "current", "date": target.isoformat(), "components": {key: str(value) for key, value in component_ends.items()}}))
             return 0
-        version = f"rqdata-a-share-{target:%Y%m%d}-full-v1"
-        try:
-            release = build_release(args, target, env)
-        except Exception:
-            for partial in args.datasets.glob(f".{version}.partial-*"):
-                shutil.rmtree(partial)
-            raise
+        release = build_release(args, target, env)
         if not args.build_only:
             active = active_qbt_runs(args.qbt_database)
             if active:
@@ -318,7 +302,6 @@ def main() -> int:
             if active:
                 raise RuntimeError(f"refusing publication while {active} QPF runs are active")
             publish(args.current, release)
-            prune_superseded_full_releases(args.current, args.datasets)
         print(
             json.dumps(
                 {

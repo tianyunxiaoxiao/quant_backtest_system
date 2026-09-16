@@ -8,6 +8,7 @@ RUN npm run build
 FROM public.ecr.aws/docker/library/python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     PIP_DEFAULT_TIMEOUT=120 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \

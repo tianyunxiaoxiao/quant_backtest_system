@@ -37,7 +37,7 @@ if rqdatac is not None:
 
     if rqdata_sync is not None:
 
-        def validate_latest_available_fields(frames):
+        def validate_latest_available_fields(frames, fields=None):
             latest = frames["close"].index[-1]
             close = frames["close"].loc[latest].to_numpy(dtype=float, copy=False)
             reference = np.isfinite(close)
@@ -45,7 +45,7 @@ if rqdatac is not None:
             if not count:
                 raise rqdata_sync.RQDataSyncError(f"latest date {latest} has no close data")
             failures = []
-            for alias in rqdata_sync.ALL_FIELDS:
+            for alias in fields or rqdata_sync.ALL_FIELDS:
                 if alias in rqdata_sync.SPARSE_LATEST_FIELDS:
                     continue
                 values = frames[alias].loc[latest].to_numpy(dtype=float, copy=False)

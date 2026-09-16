@@ -17,7 +17,8 @@
 5. 用 7 个交易日重叠窗口更新全部 31 个股票字段。
 6. 从 RQData 批量增量获取全部 A 股不复权 5 分钟数据，逐文件写入临时文件后原子替换；再用
    同版日线后复权收盘价重建 `5minbar_post`。
-7. 从同一 panel 重建回测仓库，并从 RQData 更新沪深 300、中证 500、中证 1000。
+7. 从 RQData 获取现金分红和送转事件，生成 `corporate_actions.parquet`，再从同一 panel 重建
+   回测仓库，并更新沪深 300、中证 500、中证 1000。
 8. 校验全部 panel 字段、回测交易日历和三个指数都完整覆盖目标交易日，并校验内容哈希；对
    当日有效股票逐只校验 raw/post 数据均为 48 根且时点完整，同时要求 post 的 15:00 收盘
    与日线面板一致。
@@ -25,10 +26,13 @@
    `os.replace` 切换 `current`。若平台仍忙，完整候选保留到下次重试直接校验和发布。
 10. 发布成功后，systemd 通过 `OnSuccess` 启动 `qpf-factor-values-refresh.service`。该服务只选择
     完整相关性审核中 `hidden=false` 的活跃代码因子，按日频或 5 分钟数据各自的最新日期幂等
-    重跑；上传文件型因子因缺少可执行代码会记录为跳过。
-11. 仅当存在待更新因子时，刷新服务会短暂重启 `qpf-task-api.service`，使因子平台立即读取新的
-    `/data/research/current` 指向；随后任务由现有 worker 队列执行。每个数据日期最多自动尝试
-    三次，批次清单写入 `/data/qpf/batches/factor-refresh-YYYY-MM-DD.json`。
+    重跑；上传文件型因子因缺少可执行代码会记录为跳过。基线文件哈希以 `values_run_id` 对应
+    成功 run 的结果为准，不使用可能因并发诊断更新而滞后的摘要副本。
+11. 待更新任务由现有 worker 队列执行。每个数据日期最多自动尝试三次，批次清单写入
+    `/data/qpf/batches/factor-value-refresh-YYYY-MM-DD.json`。
+
+因子近期表现刷新使用数据库原子字段合并，只写入 `recent_performance*` 字段，不覆盖同时由
+因子值 worker 更新的日期、哈希和版本字段。
 
 失败的 `.partial` 候选目录会被自动清理。发布完成后自动保留 `current` 与 `previous` 指向的
 两个 `full-v1` 版本，清理更早的 `full-v1`，避免 5 分钟 HDF5 的写时复制持续占满数据盘；

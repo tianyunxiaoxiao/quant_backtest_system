@@ -66,6 +66,11 @@ def _release(root: Path) -> None:
     )
     warehouse = root / "warehouse_rqdata"
     warehouse.mkdir()
+    corporate_actions = root / "corporate_actions.parquet"
+    pd.DataFrame(
+        columns=["date", "asset_id", "cash_dividend_per_share", "split_ratio"]
+    ).to_parquet(corporate_actions, index=False)
+    corporate_actions_hash = f"sha256:{hash_file(corporate_actions)}"
     pd.DataFrame({"date": dates}).to_parquet(warehouse / "trading_calendar.parquet", index=False)
     (warehouse / "rqdata_warehouse_manifest.json").write_text(
         json.dumps(
@@ -73,6 +78,7 @@ def _release(root: Path) -> None:
                 "date_max": "2026-09-03",
                 "source": {"content_hash": panel_hash},
                 "warehouse_content_hash": "sha256:warehouse",
+                "corporate_actions": {"sha256": corporate_actions_hash},
             }
         )
     )

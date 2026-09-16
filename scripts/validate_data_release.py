@@ -117,6 +117,16 @@ def validate_release(root: Path, *, expected_end: str | None = None) -> dict[str
     warehouse_meta = json.loads(
         (warehouse / "rqdata_warehouse_manifest.json").read_text(encoding="utf-8")
     )
+    corporate_actions_path = root / "corporate_actions.parquet"
+    if not corporate_actions_path.is_file():
+        raise ValueError("corporate_actions.parquet is missing")
+    corporate_actions = pd.read_parquet(corporate_actions_path)
+    required_action_columns = {"date", "asset_id", "cash_dividend_per_share", "split_ratio"}
+    if not required_action_columns.issubset(corporate_actions.columns):
+        raise ValueError("corporate_actions.parquet schema is incomplete")
+    action_hash = f"sha256:{_hash_file(corporate_actions_path)}"
+    if warehouse_meta.get("corporate_actions", {}).get("sha256") != action_hash:
+        raise ValueError("warehouse corporate-action source hash differs from release")
     warehouse_calendar = pd.read_parquet(warehouse / "trading_calendar.parquet")
     warehouse_dates = _dates(warehouse_calendar["date"])
     if not warehouse_dates.equals(panel_dates):

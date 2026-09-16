@@ -5,10 +5,9 @@
     T+1 日    -> 下单并按当日 VWAP 成交 (order_lag_days=1, fill_lag_days=0)
     T+1 起    -> 持仓按收盘价估值, 产生收益
 
-持仓口径: 内部按"复权股数"记账 (shares_adj), 估值一律 shares_adj * adj_close。
-下单时的交易所数量约束在"真实股数"空间做 (主板 100 股、科创板最低
-200 股后逐股、北交所最低 100 股后逐股), 再折算回复权股数。
-这样送转拆股不会凭空改变持仓市值, 分红也通过后复权价自然计入总收益。
+持仓口径: 内部按交易所真实股数记账, 估值使用原始收盘价。现金分红在除权日
+进入现金账户, 送转拆股在除权日变更真实股数。交易所数量约束因此始终作用于
+真实库存，不会把现金分红误记成新增股份。
 """
 
 from __future__ import annotations
@@ -119,7 +118,10 @@ class ExecutionEngine:
 
         # numpy 视图, 循环里避免 pandas 索引开销
         self._adj_close = prices.adj_close.to_numpy(dtype="float64")
-        # 成交价口径由 config 决定 (确认清单 B1 默认 T+1 VWAP)。复权价用于记账,
+        self._raw_close = prices.raw_close.to_numpy(dtype="float64")
+        self._cash_dividend = prices.cash_dividend_per_share.to_numpy(dtype="float64")
+        self._split_ratio = prices.split_ratio.to_numpy(dtype="float64")
+        # 成交价口径由 config 决定 (当前默认 T+1 开盘价)。复权价用于记账,
         # 原始价用于按手取整 —— 手数是按真实价格下的, 不是复权价。
         adj_field = config.execution.fill_price_field
         raw_field = {"adj_open": "raw_open", "adj_vwap": "raw_vwap", "adj_close": "raw_close"}
@@ -141,7 +143,7 @@ class ExecutionEngine:
             index=self.dates, columns=self.assets
         ).to_numpy(dtype="float64")
         self._in_index = index_universe.to_numpy(dtype=bool)
-        raw_close = prices.raw_close.to_numpy(dtype="float64")
+        raw_close = self._raw_close
         self._close_ratio = np.divide(
             raw_close,
             self._adj_close,
@@ -178,7 +180,7 @@ class ExecutionEngine:
             if ti < n_d:
                 exec_plan[ti] = si
 
-        shares = np.zeros(n_a, dtype="float64")      # 复权股数
+        shares = np.zeros(n_a, dtype="float64")      # 交易所真实股数
         cost_basis = np.zeros(n_a, dtype="float64")  # 累计买入成本 (含费)
         cash = float(initial_capital)
         identity_rows: list[dict] = []
@@ -195,24 +197,33 @@ class ExecutionEngine:
 
         # 收盘价前值填充, 停牌日按最后有效价估值 (规范 6.6 suspension_price_policy)
         last_valid_close = np.full(n_a, np.nan, dtype="float64")
-        last_valid_ratio = np.full(n_a, np.nan, dtype="float64")
         order_seq = 0
         cumulative_realized = 0.0
 
         for ti in range(n_d):
             day = self.dates[ti]
-            close_t = self._adj_close[ti]
+            close_t = self._raw_close[ti]
             valid_close = np.isfinite(close_t) & (close_t > 0) & (~self._is_delisted[ti])
-            ratio_t = self._close_ratio[ti]
-            valid_ratio = np.isfinite(ratio_t) & (ratio_t > 0) & (~self._is_delisted[ti])
-
             # 先取上一日收盘做期初估值, 再用今日收盘更新, 顺序不能反
             prev_close_vec = last_valid_close.copy()
             last_valid_close = np.where(valid_close, close_t, last_valid_close)
-            last_valid_ratio = np.where(valid_ratio, ratio_t, last_valid_ratio)
-            shares_start = shares.copy()
+            pre_action_shares = shares.copy()
             open_equity = cash + float(np.nansum(shares * np.nan_to_num(prev_close_vec)))
             open_cash = cash
+            dividend_per_share = np.where(
+                np.isfinite(self._cash_dividend[ti]) & (self._cash_dividend[ti] > 0),
+                self._cash_dividend[ti],
+                0.0,
+            )
+            dividend_income = float(np.sum(pre_action_shares * dividend_per_share))
+            cash += dividend_income
+            split_ratio = np.where(
+                np.isfinite(self._split_ratio[ti]) & (self._split_ratio[ti] > 0),
+                self._split_ratio[ti],
+                1.0,
+            )
+            shares = np.floor(pre_action_shares * split_ratio + 1e-9)
+            shares_start = shares.copy()
             day_cost = 0.0
             day_explicit_cost = 0.0
             day_buy_amt = 0.0
@@ -220,20 +231,18 @@ class ExecutionEngine:
             day_buy_ref_amt = 0.0
             day_sell_ref_amt = 0.0
             realized = 0.0
-            bought_adj = np.zeros(n_a, dtype="float64")
-            sold_adj = np.zeros(n_a, dtype="float64")
+            bought_raw = np.zeros(n_a, dtype="float64")
+            sold_raw = np.zeros(n_a, dtype="float64")
             delisting_recovery_amount = 0.0
             delisting_writeoff_amount = 0.0
 
             # 退市不是一笔可成交订单。进入退市状态后，仍残留的持仓按配置回收率
             # 一次性终止确认，并单独标为 writeoff，避免最后价格永久续值。
             for j in np.flatnonzero(self._is_delisted[ti] & (shares > 0)):
-                qty_adj = float(shares[j])
+                qty_raw = float(shares[j])
                 prior_price = float(prev_close_vec[j]) if np.isfinite(prev_close_vec[j]) else 0.0
-                prior_value = qty_adj * prior_price
+                prior_value = float(pre_action_shares[j]) * prior_price
                 recovery = prior_value * float(cfg.execution.delisting_recovery_rate)
-                ratio_j = last_valid_ratio[j] if np.isfinite(last_valid_ratio[j]) else 1.0
-                qty_raw = qty_adj / ratio_j
                 recovery_price_raw = recovery / qty_raw if qty_raw > 0 else 0.0
                 asset = self._assets_array[j]
                 order_seq += 1
@@ -257,10 +266,10 @@ class ExecutionEngine:
                 ))
                 position_period_rows.append(PositionPeriodRecord(
                     signal_date=day, date=day, asset_id=asset, action="exit",
-                    pre_quantity_raw=qty_raw, pre_quantity_adjusted=qty_adj,
+                    pre_quantity_raw=qty_raw, pre_quantity_adjusted=qty_raw,
                     target_quantity_raw=0.0, target_quantity_adjusted=0.0,
-                    order_quantity_raw=-qty_raw, order_quantity_adjusted=-qty_adj,
-                    fill_quantity_raw=-qty_raw, fill_quantity_adjusted=-qty_adj,
+                    order_quantity_raw=-qty_raw, order_quantity_adjusted=-qty_raw,
+                    fill_quantity_raw=-qty_raw, fill_quantity_adjusted=-qty_raw,
                     post_quantity_raw=0.0, post_quantity_adjusted=0.0,
                     reason="delisting_writeoff", fill_price=recovery_price_raw,
                     reference_price=recovery_price_raw, fill_ratio=1.0,
@@ -268,7 +277,7 @@ class ExecutionEngine:
                 ))
                 realized += recovery - float(cost_basis[j])
                 cash += recovery
-                sold_adj[j] = qty_adj
+                sold_raw[j] = qty_raw
                 day_sell_ref_amt += recovery
                 delisting_recovery_amount += recovery
                 delisting_writeoff_amount += prior_value - recovery
@@ -282,7 +291,7 @@ class ExecutionEngine:
                     tw_row=tw_arr[si], shares=shares, cost_basis=cost_basis,
                     cash=cash, last_valid_close=prev_close_vec,
                     orders=orders, fills=fills, unfilled_rows=unfilled_rows,
-                    order_seq=order_seq, bought_adj=bought_adj, sold_adj=sold_adj,
+                    order_seq=order_seq, bought_raw=bought_raw, sold_raw=sold_raw,
                 )
                 cash = res["cash"]
                 day_cost += res["cost"]
@@ -310,20 +319,23 @@ class ExecutionEngine:
                 else np.nan
             )
 
-            # 独立重算持仓损益, 与净资产变动对账 (规范 8.3)。
-            # 三段拆分: 全天持有段 + 当日卖出段 + 当日买入段。
+            # 以账户净资产独立闭合总损益；分项仅用于解释，不参与记账。
             pc = np.nan_to_num(prev_close_vec)
             ct = np.where(valid_close, close_t, pc)
-            held_through = shares_start - sold_adj
-            pnl_hold = float(np.sum(np.where(held_through > 0, held_through * (ct - pc), 0.0)))
             pnl_sell = day_sell_ref_amt - float(
-                np.sum(np.where(sold_adj > 0, sold_adj * pc, 0.0))
+                np.sum(np.where(sold_raw > 0, sold_raw * ct, 0.0))
             )
             pnl_buy = (
-                float(np.sum(np.where(bought_adj > 0, bought_adj * ct, 0.0)))
+                float(np.sum(np.where(bought_raw > 0, bought_raw * ct, 0.0)))
                 - day_buy_ref_amt
             )
-            gross_pnl = pnl_hold + pnl_sell + pnl_buy
+            gross_pnl = (
+                dividend_income
+                + float(np.sum(shares * ct - pre_action_shares * pc))
+                + day_sell_ref_amt
+                - day_buy_ref_amt
+            )
+            pnl_hold = gross_pnl - pnl_sell - pnl_buy
             identity_rows.append({
                 "date": day,
                 "open_net_assets": open_equity,
@@ -331,6 +343,7 @@ class ExecutionEngine:
                 "pnl_sold_intraday": pnl_sell,
                 "pnl_bought_intraday": pnl_buy,
                 "gross_pnl": gross_pnl,
+                "dividend_income": dividend_income,
                 "trade_cost": day_cost,
                 "explicit_cost": day_explicit_cost,
                 "external_flow": 0.0,
@@ -361,6 +374,7 @@ class ExecutionEngine:
                     "turnover": turnover,
                     "delisting_recovery_amount": delisting_recovery_amount,
                     "delisting_writeoff_amount": delisting_writeoff_amount,
+                    "dividend_income": dividend_income,
                     "is_rebalance": si is not None,
                     "signal_date": self.dates[si] if si is not None else pd.NaT,
                 }
@@ -377,7 +391,7 @@ class ExecutionEngine:
     def _rebalance_day(
         self, *, ti, si, day, signal_day, tw_row, shares, cost_basis, cash,
         last_valid_close, orders, fills, unfilled_rows, order_seq,
-        bought_adj, sold_adj,
+        bought_raw, sold_raw,
     ) -> dict:
         cfg = self.config
         vwap_adj = self._fill_adj[ti]
@@ -432,12 +446,7 @@ class ExecutionEngine:
         np.divide(target_val, sig_close_adj, out=target_adj_shares, where=sizing_ok)
         raw_target_shares = np.zeros_like(target_val)
         np.divide(target_adj_shares, ratio, out=raw_target_shares, where=sizing_ok)
-        raw_held = np.divide(
-            shares, ratio, out=np.zeros_like(shares), where=np.isfinite(ratio) & (ratio > 0)
-        )
-        # 实际账户只能持有整数股。复权因子重建误差可能产生极小的小数尾差，
-        # 在原始股数空间统一还原为整数后再生成订单。
-        raw_held = np.where(raw_held > 0, np.rint(raw_held), 0.0)
+        raw_held = shares.copy()
         # 信号日无有效收盘价 -> 无法折算目标股数。持仓票默认"不动"而不是清仓:
         # 缺价是数据问题, 按 0 处理会凭空造出一笔清仓单。
         hold_still = (~sizing_ok) & (shares > 0)
@@ -511,21 +520,20 @@ class ExecutionEngine:
             delta_raw = float(raw_held[j]) - want_raw
             if delta_raw <= 0:
                 continue
-            # 卖出按整手向下取整, 但清仓允许卖零股 (allow_odd_lot_sell)
+            # 卖出按整手向下取整。只有一次成交能真正清零时才允许卖零股；
+            # 若 ADV/换手率/单笔上限会截断，截断后的部分成交仍必须是整手。
             full_exit = bool(exits[j] or want_raw <= 0)
             allow_odd = bool(cfg.execution.allow_odd_lot_sell and full_exit)
-            sell_minimum = 1 if allow_odd else int(lot)
-            sell_step = 1 if allow_odd else int(step)
             if allow_odd:
                 qty_raw = float(np.floor(raw_held[j] + 1e-9))
             else:
-                qty_raw = _round_buy_quantity(delta_raw, sell_minimum, sell_step)
+                qty_raw = _round_buy_quantity(delta_raw, int(lot), int(step))
             if qty_raw <= 0:
                 continue
             order_size_capped = qty_raw > max_order_qty
             if order_size_capped:
                 qty_raw = _round_buy_quantity(
-                    float(max_order_qty), sell_minimum, sell_step
+                    float(max_order_qty), int(lot), int(step)
                 )
             reason = "index_exit_forced" if exits[j] else "rebalance_reduce"
             order_seq += 1
@@ -558,11 +566,15 @@ class ExecutionEngine:
                 })
                 continue
             fill_price_raw = self.costs.slippage_price(float(vwap_raw[j]), "sell")
+            cap_minimum = 1 if allow_odd and qty_raw <= raw_held[j] + 1e-9 else int(lot)
+            cap_step = 1 if cap_minimum == 1 else int(step)
             qty_raw, capped = self._apply_adv(
                 qty_raw, adv[j], fill_price_raw, max_part, lot,
-                minimum=sell_minimum,
-                step=sell_step,
+                minimum=cap_minimum,
+                step=cap_step,
             )
+            if capped and allow_odd:
+                qty_raw = _round_buy_quantity(qty_raw, int(lot), int(step))
             if qty_raw <= 0:
                 fills.append(self._reject(oid, asset, day, "sell", ref_price, 0.0, "adv_cap_zero"))
                 _record_fill(j, "sell", 0.0, np.nan, vwap_raw[j], "rejected", "adv_cap")
@@ -577,8 +589,8 @@ class ExecutionEngine:
             else:
                 qty_raw, turnover_capped = self._apply_notional_cap(
                     qty_raw, fill_price_raw, remaining_turnover_notional, lot,
-                    minimum=sell_minimum,
-                    step=sell_step,
+                    minimum=int(lot),
+                    step=int(step),
                 )
             if qty_raw <= 0:
                 fills.append(
@@ -599,16 +611,12 @@ class ExecutionEngine:
             fc = self.costs.compute(side="sell", filled_quantity=qty_raw,
                                     fill_price=fill_price_raw,
                                     reference_price=float(vwap_raw[j]), fill_date=day)
-            # A full raw-share liquidation must consume the exact remaining adjusted
-            # balance. Provider reconstruction noise can otherwise make
-            # qty_raw * ratio exceed shares[j] slightly, and the later zero clamp
-            # would create a false accounting residual.
             full_liquidation = qty_raw >= raw_held[j] - 1e-9
-            qty_adj = shares[j] if full_liquidation else min(qty_raw * ratio[j], shares[j])
+            qty_book = shares[j] if full_liquidation else min(qty_raw, shares[j])
             avg_cost = cost_basis[j] / shares[j] if shares[j] > 0 else 0.0
-            realized += notional - fc.explicit_total - avg_cost * qty_adj
-            cost_basis[j] = max(cost_basis[j] - avg_cost * qty_adj, 0.0)
-            shares[j] = max(shares[j] - qty_adj, 0.0)
+            realized += notional - fc.explicit_total - avg_cost * qty_book
+            cost_basis[j] = max(cost_basis[j] - avg_cost * qty_book, 0.0)
+            shares[j] = max(shares[j] - qty_book, 0.0)
             if shares[j] <= 1e-9:
                 shares[j] = 0.0
                 cost_basis[j] = 0.0
@@ -617,7 +625,7 @@ class ExecutionEngine:
             explicit_cost += fc.explicit_total
             sell_amount += notional
             sell_reference_amount += qty_raw * float(vwap_raw[j])
-            sold_adj[j] += qty_adj
+            sold_raw[j] += qty_book
             fills.append(FillRecord(
                 order_id=oid, asset_id=asset, order_date=day, fill_date=day, side="sell",
                 fill_price=fill_price_raw, reference_price=float(vwap_raw[j]),
@@ -757,8 +765,7 @@ class ExecutionEngine:
             fc = self.costs.compute(side="buy", filled_quantity=qty_raw,
                                     fill_price=fill_price_raw,
                                     reference_price=float(vwap_raw[j]), fill_date=day)
-            qty_adj = qty_raw * ratio[j]
-            shares[j] += qty_adj
+            shares[j] += qty_raw
             cost_basis[j] += notional + fc.explicit_total
             cash -= notional + fc.explicit_total
             cash_tolerance = max(1e-8, equity * 1e-12)
@@ -770,7 +777,7 @@ class ExecutionEngine:
             explicit_cost += fc.explicit_total
             buy_amount += notional
             buy_reference_amount += qty_raw * float(vwap_raw[j])
-            bought_adj[j] += qty_adj
+            bought_raw[j] += qty_raw
             status = (
                 "filled"
                 if not (
@@ -871,8 +878,8 @@ class ExecutionEngine:
                 fill_ratio = 1.0 if action == "hold" else 0.0
             post_raw = pre_raw + fill_raw
             ratio_j = ratio[j] if np.isfinite(ratio[j]) and ratio[j] > 0 else 1.0
-            pre_adj = float(shares_start[j])
-            post_adj = float(shares[j])
+            pre_adj = float(shares_start[j] * ratio_j)
+            post_adj = float(shares[j] * ratio_j)
             tgt_adj = tgt_raw * ratio_j
             order_adj = order_raw * ratio_j
             fill_adj = fill_raw * ratio_j
@@ -996,8 +1003,7 @@ class ExecutionEngine:
         net = ledger["net_assets"]
         actual_weights = hv.div(net.where(net > 0), axis=0).fillna(0.0)
 
-        # 账户恒等式校验 (规范 8.3)。gross_pnl 由持仓/成交独立重算, 不是残差回填,
-        # 所以 residual 是真的对账误差, 能抓出记账错误。
+        # 账户恒等式校验 (规范 8.3)。gross_pnl 由持仓、公司行动与成交独立重算。
         identity = pd.DataFrame(identity_rows).set_index("date")
         identity["residual"] = identity["expected_close"] - identity["close_net_assets"]
         identity["residual_bps_of_nav"] = (

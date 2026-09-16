@@ -125,6 +125,24 @@ def _safe_divide(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
     return out
 
 
+def _load_corporate_actions(snapshot: Path) -> pd.DataFrame:
+    path = snapshot.parent / "corporate_actions.parquet"
+    if not path.is_file():
+        raise FileNotFoundError(f"RQData corporate actions missing: {path}")
+    frame = pd.read_parquet(path)
+    required = {"date", "asset_id", "cash_dividend_per_share", "split_ratio"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"RQData corporate actions missing columns: {missing}")
+    frame = frame.assign(
+        date=pd.to_datetime(frame["date"]).dt.normalize(),
+        asset_id=frame["asset_id"].astype(str),
+    )
+    if frame.duplicated(["date", "asset_id"]).any():
+        raise ValueError("RQData corporate actions contain duplicate date/asset rows")
+    return frame.set_index(["date", "asset_id"]).sort_index()
+
+
 def _build_year(
     snapshot: Path,
     year: int,
@@ -132,6 +150,7 @@ def _build_year(
     listed_first: pd.Series,
     listed_last: pd.Series,
     previous_close: pd.Series,
+    corporate_actions: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.Series]:
     matrices = {field: _read_matrix(snapshot, field, year, tickers) for field in _SOURCE_FIELDS}
     close = matrices["close"]
@@ -171,6 +190,10 @@ def _build_year(
     raw_limit_down = _safe_divide(take("limit_down"), adj_factor)
 
     asset_values = tickers.to_numpy()[col_pos]
+    event_index = pd.MultiIndex.from_arrays(
+        [dates.to_numpy()[row_pos], asset_values], names=["date", "asset_id"]
+    )
+    year_actions = corporate_actions.reindex(event_index)
     frame = pd.DataFrame(
         {
             "asset_id": pd.Categorical(asset_values, categories=tickers),
@@ -203,6 +226,8 @@ def _build_year(
             "listed_days": take("listed_days").astype("float32"),
             "listed_first_date": pd.to_datetime(listed_first.reindex(asset_values).to_numpy()),
             "listed_last_date": pd.to_datetime(listed_last.reindex(asset_values).to_numpy()),
+            "cash_dividend_per_share": year_actions["cash_dividend_per_share"].fillna(0.0).to_numpy(dtype="float32"),
+            "split_ratio": year_actions["split_ratio"].fillna(1.0).to_numpy(dtype="float32"),
         }
     )
     frame["ohlc_violation"] = (
@@ -240,11 +265,13 @@ def build_rq_snapshot_warehouse(cfg: RQSnapshotIngestConfig) -> dict:
             snapshot, years, tickers, dates[0], dates[-1], metadata
         )
         previous_close = pd.Series(np.nan, index=tickers, dtype="float64")
+        corporate_actions = _load_corporate_actions(snapshot)
         partitions = []
         total_rows = 0
         for year in years:
             frame, previous_close = _build_year(
-                snapshot, year, tickers, listed_first, listed_last, previous_close
+                snapshot, year, tickers, listed_first, listed_last, previous_close,
+                corporate_actions,
             )
             path = stage_prices / f"daily_prices_{year}.parquet"
             frame.to_parquet(path, index=False, compression="snappy")
@@ -326,6 +353,11 @@ def build_rq_snapshot_warehouse(cfg: RQSnapshotIngestConfig) -> dict:
             "partitions": partitions,
             "trading_calendar": calendar_ref,
             "asset_master": asset_master_ref,
+            "corporate_actions": {
+                "path": "../corporate_actions.parquet",
+                "rows": len(corporate_actions),
+                "sha256": f"sha256:{hash_file(snapshot.parent / 'corporate_actions.parquet')}",
+            },
             "supported_indexes": [
                 {
                     "index_id": "ALL_A_EQ",
@@ -350,7 +382,7 @@ def build_rq_snapshot_warehouse(cfg: RQSnapshotIngestConfig) -> dict:
             ),
         }
         manifest["warehouse_content_hash"] = (
-            f"sha256:{hash_json({'partitions': partitions, 'trading_calendar': calendar_ref, 'asset_master': asset_master_ref})}"
+            f"sha256:{hash_json({'partitions': partitions, 'trading_calendar': calendar_ref, 'asset_master': asset_master_ref, 'corporate_actions': manifest['corporate_actions']})}"
         )
         (stage / "rqdata_warehouse_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -31,6 +31,8 @@ def _single_asset_execution(
     transfer_fee_rate: float = 0.0,
     delisted_values=None,
     delisting_recovery_rate: float = 0.0,
+    cash_dividend_per_share=0.0,
+    split_ratio=1.0,
 ):
     dates = pd.date_range("2020-01-02", periods=len(target_values), freq="B")
     columns = pd.Index([asset_id])
@@ -53,6 +55,8 @@ def _single_asset_execution(
         adj_factor=adjusted.div(raw),
         volume=matrix(10_000_000),
         amount=matrix(100_000_000),
+        cash_dividend_per_share=matrix(cash_dividend_per_share),
+        split_ratio=matrix(split_ratio),
         fill_price_field="adj_open",
     )
     delisted = matrix(
@@ -384,13 +388,62 @@ def test_execution_lot_rounding(small_price_frame, small_tradability, small_liqu
     assert all(f.filled_quantity % 100 == 0 for f in buy_fills)
 
 
-def test_execution_converts_raw_shares_to_adjusted_shares_without_nav_jump():
+def test_execution_keeps_exchange_raw_shares_without_nav_jump():
     out = _single_asset_execution(adjusted_price=5.0, raw_price=10.0, slippage_bps=0.0)
     fill = out.fills[0]
     assert fill.filled_quantity == 1_000.0
-    assert out.holdings_shares.iloc[1, 0] == 2_000.0
+    assert out.holdings_shares.iloc[1, 0] == 1_000.0
     assert out.cash_ledger["net_assets"].iloc[1] == pytest.approx(10_000.0)
     assert out.accounting_identity["residual"].abs().max() < 1e-9
+
+
+def test_cash_dividend_is_credited_to_cash_without_creating_shares():
+    out = _single_asset_execution(
+        adjusted_price=[10.0, 10.0, 10.0],
+        raw_price=[10.0, 10.0, 9.3],
+        cash_dividend_per_share=[0.0, 0.0, 0.7],
+        slippage_bps=0.0,
+    )
+
+    assert out.holdings_shares.iloc[2, 0] == 1_000.0
+    assert out.cash_ledger["dividend_income"].iloc[2] == pytest.approx(700.0)
+    assert out.cash_ledger["cash"].iloc[2] == pytest.approx(700.0)
+    assert out.cash_ledger["net_assets"].iloc[2] == pytest.approx(10_000.0)
+    assert out.accounting_identity["residual"].abs().max() < 1e-9
+
+
+def test_split_changes_raw_shares_without_changing_nav():
+    out = _single_asset_execution(
+        adjusted_price=[10.0, 10.0, 10.0],
+        raw_price=[10.0, 10.0, 5.0],
+        split_ratio=[1.0, 1.0, 2.0],
+        slippage_bps=0.0,
+    )
+
+    assert out.holdings_shares.iloc[2, 0] == 2_000.0
+    assert out.cash_ledger["net_assets"].iloc[2] == pytest.approx(10_000.0)
+    assert out.accounting_identity["residual"].abs().max() < 1e-9
+
+
+def test_adv_capped_full_exit_remains_round_lot_until_final_liquidation():
+    out = _single_asset_execution(
+        adjusted_price=[1.0, 1.0, 1.0],
+        raw_price=[1.0, 1.0, 1.0],
+        adv=[1_000_000.0, 1_000_000.0, 91_770.0],
+        max_adv_participation=1.0,
+        initial_capital=177_500.0,
+        target_values=(1.0, 0.0, 0.0),
+        rebalance_positions=(0, 1),
+        asset_id="002898.SZ",
+        slippage_bps=0.0,
+    )
+
+    sell = [fill for fill in out.fills if fill.side == "sell"][0]
+    assert sell.status == "partial"
+    assert sell.reject_reason == "adv_cap"
+    assert sell.filled_quantity == 91_700.0
+    assert sell.filled_quantity % 100 == 0
+    assert out.holdings_shares.iloc[2, 0] == 85_800.0
 
 
 def test_embedded_slippage_is_not_deducted_twice_from_cash():

@@ -19,6 +19,7 @@ _WIDE_FIELDS = (
     "raw_open", "raw_close", "raw_vwap", "adj_factor", "volume", "amount",
     "turnover_rate", "float_mktcap", "total_mktcap", "pb", "pe", "ps",
     "raw_limit_up", "raw_limit_down", "is_st", "listed_days",
+    "cash_dividend_per_share", "split_ratio",
 )
 
 

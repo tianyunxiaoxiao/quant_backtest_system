@@ -393,7 +393,7 @@ class LongOnlyFactorBacktester:
             "与官方指数存在跟踪误差; 拿到官方指数点位后可替换。"
         )
         disclosures = [
-            "价格与收益在复权价格空间计算, 数量与估值使用复权股数, 等价于分红再投资的全收益近似。",
+            "账户按真实股数和原始价格记账；现金分红进入现金，送转拆股按除权日调整股数。",
             benchmark_disclosure,
             "风格暴露为基于价量/估值字段自建的简化代理 (非 Barra), "
             "Growth/Quality/Leverage 因缺财务数据标记为缺失。",
@@ -615,8 +615,8 @@ class LongOnlyFactorBacktester:
             columns=execution.holdings_shares.columns,
         )
         fields = {
-            "quantity_raw": execution.holdings_shares * factor,
-            "quantity_adjusted": execution.holdings_shares,
+            "quantity_raw": execution.holdings_shares,
+            "quantity_adjusted": execution.holdings_shares / factor.replace(0.0, np.nan),
             "cost_basis": execution.holdings_cost_basis,
             "market_value": execution.holdings_value,
             "unrealized_pnl": execution.holdings_unrealized_pnl,

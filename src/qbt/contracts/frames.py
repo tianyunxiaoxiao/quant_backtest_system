@@ -80,9 +80,10 @@ class FactorFrame:
 class MarketPriceFrame:
     """价格与成交量数据 (规范 6.4)。
 
-    adj_* 为复权口径 (记账与收益计算使用);
-    raw_* 为原始价口径 (整手、涨跌停判定使用);
+    adj_* 为复权口径 (信号与目标股数换算使用);
+    raw_* 为原始价口径 (真实持仓记账、整手、涨跌停判定使用);
     adj_factor = adj_close / raw_close, 逐段常数。
+    cash_dividend_per_share 与 split_ratio 在除权日生效。
     """
 
     adj_open: pd.DataFrame
@@ -97,6 +98,8 @@ class MarketPriceFrame:
     adj_factor: pd.DataFrame
     volume: pd.DataFrame
     amount: pd.DataFrame
+    cash_dividend_per_share: pd.DataFrame | None = None
+    split_ratio: pd.DataFrame | None = None
     price_basis: str = "backward_adjusted_from_provider"
     fill_price_field: str = "adj_vwap"
     suspension_price_policy: str = "last_valid_close"
@@ -107,8 +110,20 @@ class MarketPriceFrame:
     )
 
     def __post_init__(self) -> None:
+        if self.cash_dividend_per_share is None:
+            object.__setattr__(
+                self,
+                "cash_dividend_per_share",
+                pd.DataFrame(0.0, index=self.adj_close.index, columns=self.adj_close.columns),
+            )
+        if self.split_ratio is None:
+            object.__setattr__(
+                self,
+                "split_ratio",
+                pd.DataFrame(1.0, index=self.adj_close.index, columns=self.adj_close.columns),
+            )
         ref_idx = ref_cols = None
-        for name in self._MATRICES:
+        for name in (*self._MATRICES, "cash_dividend_per_share", "split_ratio"):
             df = _check_matrix(f"MarketPriceFrame.{name}", getattr(self, name))
             object.__setattr__(self, name, df)
             if ref_idx is None:

@@ -557,6 +557,14 @@ class PortfolioDataPortal:
             adj_factor=w["adj_factor"],
             volume=w["volume"],
             amount=w["amount"],
+            cash_dividend_per_share=w.get(
+                "cash_dividend_per_share",
+                pd.DataFrame(0.0, index=w["adj_close"].index, columns=w["adj_close"].columns),
+            ).fillna(0.0),
+            split_ratio=w.get(
+                "split_ratio",
+                pd.DataFrame(1.0, index=w["adj_close"].index, columns=w["adj_close"].columns),
+            ).fillna(1.0),
             price_basis="provider_backward_adjusted; raw rebuilt from mktcap/shares",
             fill_price_field=fill_price_field or self.config.fill_price_field,
         ), raw_prev_close
@@ -686,6 +694,8 @@ class PortfolioDataPortal:
     def _slice_price_frame(bundle, dates: pd.DatetimeIndex) -> MarketPriceFrame:
         prices, _ = bundle
         kwargs = {name: getattr(prices, name).loc[dates] for name in MarketPriceFrame._MATRICES}
+        kwargs["cash_dividend_per_share"] = prices.cash_dividend_per_share.loc[dates]
+        kwargs["split_ratio"] = prices.split_ratio.loc[dates]
         return MarketPriceFrame(
             **kwargs,
             price_basis=prices.price_basis,

@@ -127,6 +127,21 @@ def build_release(args: argparse.Namespace, target_date: date, env: dict[str, st
     run(
         [
             str(args.python),
+            str(args.corporate_actions_script),
+            "--panel-metadata",
+            str(partial / "panel_shards" / "metadata.json"),
+            "--output",
+            str(partial / "corporate_actions.parquet"),
+            "--start-date",
+            args.start_date.isoformat(),
+            "--end-date",
+            target_date.isoformat(),
+        ],
+        env=env,
+    )
+    run(
+        [
+            str(args.python),
             str(args.minbar_adjust_script),
             "--raw-root",
             str(partial / "5minbar_unadjusted"),
@@ -240,6 +255,11 @@ def parser() -> argparse.ArgumentParser:
         "--minbar-adjust-script",
         type=Path,
         default=Path("/opt/qpf/app/scripts/build_adjusted_5minbar.py"),
+    )
+    result.add_argument(
+        "--corporate-actions-script",
+        type=Path,
+        default=Path("/opt/qbt/app/scripts/fetch_rqdata_corporate_actions.py"),
     )
     result.add_argument(
         "--validator-script",

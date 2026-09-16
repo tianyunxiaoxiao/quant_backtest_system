@@ -70,6 +70,14 @@ def _write_snapshot(root) -> None:
             "de_listed_date": [pd.NaT, pd.NaT],
         }
     ).to_parquet(root / "instruments.parquet", index=False)
+    pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2019-01-03")],
+            "asset_id": ["000001.SZ"],
+            "cash_dividend_per_share": [0.7],
+            "split_ratio": [1.2],
+        }
+    ).to_parquet(root.parent / "corporate_actions.parquet", index=False)
 
 
 def test_build_rq_snapshot_warehouse_reconstructs_prices(tmp_path):
@@ -92,6 +100,11 @@ def test_build_rq_snapshot_warehouse_reconstructs_prices(tmp_path):
     assert first["adj_vwap"] == 20.0
     assert first["raw_limit_up"] == 11.0
     assert first["raw_limit_down"] == 9.0
+    event = frame[
+        (frame["asset_id"] == "000001.SZ") & (frame["date"] == pd.Timestamp("2019-01-03"))
+    ].iloc[0]
+    assert event["cash_dividend_per_share"] == pytest.approx(0.7)
+    assert event["split_ratio"] == pytest.approx(1.2)
     assert newcomer["listed_first_date"] == pd.Timestamp("2019-01-03")
     assert manifest["source"]["provider"]["vendor"] == "Ricequant RQData"
     assert manifest["rows"] == 3

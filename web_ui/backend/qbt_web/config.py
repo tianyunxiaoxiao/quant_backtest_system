@@ -26,11 +26,13 @@ class Settings(BaseSettings):
 
     qbt_project_root: Path = _default_qbt_root()
     qbt_warehouse: Path | None = None
+    qbt_barra_dir: Path | None = None
     qbt_index_dir: Path | None = None
+    qbt_index_weights_dir: Path | None = None
     output_root: Path = _PROJECT_ROOT / "data" / "runs"
     database_path: Path = _PROJECT_ROOT / "qbt_web.db"
     cors_origins: list[str] = ["*"]
-    app_name: str = "量化回测可视化"
+    app_name: str = "添橙Gaia量化回测平台"
     factor_platform_url: str | None = None
     factor_task_api_url: str | None = None
     factor_task_api_key_id: str | None = None

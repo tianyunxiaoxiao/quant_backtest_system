@@ -210,7 +210,9 @@ class LongOnlyFactorBacktester:
             index_weights=resolved.index_weights.fillna(0.0),
             style_panels={k.lower(): v for k, v in resolved.style_exposures.items()},
             excess_returns=return_frame["excess_return"],
-            data_source="proxy_from_price_and_valuation",
+            data_source=str(
+                resolved.notes.get("style_data_source", "proxy_from_price_and_valuation")
+            ),
         )
         mark_timing("style_exposure")
 
@@ -395,9 +397,13 @@ class LongOnlyFactorBacktester:
         disclosures = [
             "账户按真实股数和原始价格记账；现金分红进入现金，送转拆股按除权日调整股数。",
             benchmark_disclosure,
-            "风格暴露为基于价量/估值字段自建的简化代理 (非 Barra), "
-            "Growth/Quality/Leverage 因缺财务数据标记为缺失。",
-            f"T+1 按 {cfg.execution.fill_price_field} 成交 (默认全天 VWAP), "
+            (
+                "风格暴露来自 RQData Barra v2 日度 PIT 暴露；缺失日期或证券不做回填。"
+                if resolved.notes.get("style_data_source") == "rqdata_barra_v2"
+                else "风格暴露为基于价量/估值字段自建的简化代理 (非 Barra), "
+                "Growth/Quality/Leverage 因缺财务数据标记为缺失。"
+            ),
+            f"T+1 按 {cfg.execution.fill_price_field} 成交 (默认开盘价), "
             "整手买入、卖出允许零股, 先卖后买, 未成交订单当日取消。",
         ]
         if resolved.tradability.st_data_available:

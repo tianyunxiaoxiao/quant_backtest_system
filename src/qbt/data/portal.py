@@ -28,6 +28,7 @@ from .benchmark import (
     build_equal_weight_all_a_returns,
     load_official_benchmark,
 )
+from .barra import load_barra_style_exposures
 from .hashing import hash_file, hash_files_cached, hash_frame, hash_json, hash_series
 from .ingest_index import (
     ALL_A_INDEX_ID,
@@ -50,18 +51,21 @@ class PortalConfig:
     calendar_min_active: int = 200
     adv_window: int = 20
     limit_buffer_ratio: float = 0.005
-    # 确认清单 B1: 默认 T+1 VWAP。涨跌停判定口径随之对齐。
-    fill_price_field: str = "adj_vwap"
+    # 默认 T+1 开盘价。涨跌停判定口径随成交价字段对齐。
+    fill_price_field: str = "adj_open"
     benchmark_drift_within_period: bool = True
     official_benchmark_files: dict[str, str] = field(default_factory=dict)
     style_warmup_days: int = 300
     cache_dir: Path | None = None
+    barra_dir: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "warehouse_dir", Path(self.warehouse_dir))
         object.__setattr__(self, "index_source_dir", Path(self.index_source_dir))
         if self.cache_dir is not None:
             object.__setattr__(self, "cache_dir", Path(self.cache_dir))
+        if self.barra_dir is not None:
+            object.__setattr__(self, "barra_dir", Path(self.barra_dir))
         if self.calendar_min_active < 1:
             raise ValueError("calendar_min_active 必须 >= 1")
         if self.adv_window < 1:
@@ -393,7 +397,9 @@ class PortfolioDataPortal:
             config.execution.limit_touch_buffer,
         )
         liquidity = self._build_liquidity(panel)
-        styles, style_coverage = self._build_styles(panel, member_full)
+        styles, style_coverage, style_metadata = self._build_styles(
+            panel, member_full, start=start, end=end
+        )
 
         benchmark, bench_stats = self._build_benchmark(
             index_id, panel, weight_full, member_full, monthly
@@ -439,8 +445,8 @@ class PortfolioDataPortal:
         dataset_refs.append(
             DatasetRef(
                 name="style_exposures",
-                uri="derived:proxy_styles_v1",
-                content_hash=hash_json(
+                uri=str(style_metadata["uri"]),
+                content_hash=str(style_metadata.get("content_hash") or hash_json(
                     {
                         "schema_version": "qbt-proxy-styles/v2",
                         "daily_prices": daily_prices_hash,
@@ -454,16 +460,21 @@ class PortfolioDataPortal:
                         "date_min": str(dates[0]),
                         "date_max": str(dates[-1]),
                     }
+                )),
+                rows=int(style_metadata.get("rows", len(dates))),
+                columns=int(style_metadata.get("columns", len(styles))),
+                date_min=str(style_metadata.get("date_min") or dates[0].date()),
+                date_max=str(style_metadata.get("date_max") or dates[-1].date()),
+                notes=(
+                    f"source={style_metadata['data_source']}; present={sorted(styles)}; "
+                    f"missing={style_metadata['missing_styles']}; "
+                    f"mapping={style_metadata.get('mapping', {})}"
                 ),
-                rows=len(dates),
-                columns=len(styles),
-                date_min=str(dates[0].date()),
-                date_max=str(dates[-1].date()),
-                notes=f"present={sorted(styles)}; missing={list(MISSING_STYLES)}",
             )
         )
         notes["style_coverage"] = style_coverage
-        notes["missing_styles"] = list(MISSING_STYLES)
+        notes["style_data_source"] = style_metadata["data_source"]
+        notes["missing_styles"] = list(style_metadata["missing_styles"])
         notes["warnings"] = warnings_list
         notes["window"] = {
             "start": str(dates[0].date()),
@@ -590,7 +601,7 @@ class PortfolioDataPortal:
             raw_high=panel.raw_high,
             raw_low=panel.raw_low,
             raw_open=w["raw_open"],
-            # 判定口径必须跟成交价一致 (导师 B1 默认 T+1 VWAP)
+            # 判定口径必须跟成交价一致 (当前默认 T+1 开盘价)
             raw_fill_price=w[self._raw_fill_field(fill_price_field)],
             raw_limit_up=w.get("raw_limit_up"),
             raw_limit_down=w.get("raw_limit_down"),
@@ -663,15 +674,43 @@ class PortfolioDataPortal:
             adv=adv, turnover_rate=panel.wide.get("turnover_rate"), adv_window=window
         )
 
-    def _build_styles(self, panel, member: pd.DataFrame):
+    def _build_styles(
+        self,
+        panel,
+        member: pd.DataFrame,
+        *,
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+    ):
+        barra_dir = self.config.barra_dir
+        if barra_dir is None:
+            candidate = Path(self.config.warehouse_dir) / "barra_v2"
+            barra_dir = candidate if candidate.is_dir() else None
+        if barra_dir is not None:
+            dates = panel.trading_days[(panel.trading_days >= start) & (panel.trading_days <= end)]
+            return load_barra_style_exposures(
+                barra_dir,
+                dates=dates,
+                assets=panel.assets,
+                valid_mask=member.loc[dates],
+            )
         w = panel.wide
-        return build_style_exposures(
+        styles, coverage = build_style_exposures(
             adj_close=w["adj_close"],
             float_mktcap=w["float_mktcap"],
             pb=w["pb"],
             turnover_rate=w["turnover_rate"],
             valid_mask=member,
         )
+        return styles, coverage, {
+            "data_source": "proxy_from_price_and_valuation",
+            "uri": "derived:proxy_styles_v1",
+            "rows": len(panel.trading_days),
+            "columns": len(styles),
+            "date_min": str(panel.trading_days[0].date()),
+            "date_max": str(panel.trading_days[-1].date()),
+            "missing_styles": list(MISSING_STYLES),
+        }
 
     def _build_benchmark(self, index_id, panel, weights, member, monthly):
         if index_id == ALL_A_INDEX_ID:

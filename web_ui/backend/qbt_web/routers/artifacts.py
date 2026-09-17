@@ -17,6 +17,8 @@ from qbt_web.config import settings
 from qbt_web.models import ArtifactList, ChartData
 from qbt_web.services import chartdata
 from qbt_web.services.benchmark_comparison import compare_run
+from qbt_web.services.barra_attribution import barra_style_attribution
+from qbt_web.services.style_comparison import compare_style_run
 
 router = APIRouter(prefix="/api/runs")
 
@@ -87,6 +89,50 @@ async def benchmark_comparison(
     root = _artifact_dir(run_id, request)
     try:
         return compare_run(root, benchmark_id, settings.warehouse_dir)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{run_id}/style-comparison")
+async def style_benchmark_comparison(
+    run_id: str,
+    request: Request,
+    benchmark_id: str = "ALL_A_EQ",
+):
+    root = _artifact_dir(run_id, request)
+    try:
+        return compare_style_run(
+            root,
+            benchmark_id,
+            settings.warehouse_dir,
+            barra_dir=settings.qbt_barra_dir,
+            index_weights_dir=settings.qbt_index_weights_dir,
+            index_source_dir=settings.index_source_dir,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{run_id}/barra-attribution")
+async def get_barra_attribution(
+    run_id: str,
+    request: Request,
+    benchmark_id: str = "ALL_A_EQ",
+):
+    root = _artifact_dir(run_id, request)
+    try:
+        return barra_style_attribution(
+            root,
+            benchmark_id,
+            settings.warehouse_dir,
+            barra_dir=settings.qbt_barra_dir,
+            index_weights_dir=settings.qbt_index_weights_dir,
+            index_source_dir=settings.index_source_dir,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (FileNotFoundError, ValueError) as exc:

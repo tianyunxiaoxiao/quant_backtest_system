@@ -8,7 +8,7 @@ from qbt.analytics.metrics import (
 )
 from qbt.analytics.returns import build_return_frame, drawdown_series, drawdown_table
 from qbt.analytics.selection_report import build_selection_report
-from qbt.analytics.style import REQUIRED_STYLES, compute_style_exposure
+from qbt.analytics.style import REQUIRED_STYLES, compute_style_exposure, weighted_exposure
 
 __all__ = [
     "OLSResult",
@@ -18,6 +18,7 @@ __all__ = [
     "compute_alpha_beta",
     "compute_performance_stats",
     "compute_style_exposure",
+    "weighted_exposure",
     "drawdown_series",
     "drawdown_table",
     "monthly_table",

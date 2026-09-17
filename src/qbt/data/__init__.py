@@ -5,6 +5,11 @@ from qbt.data.benchmark import (
     build_equal_weight_all_a_returns,
     load_official_benchmark,
 )
+from qbt.data.barra import (
+    BARRA_STYLE_MAPPING,
+    load_barra_factor_returns,
+    load_barra_style_exposures,
+)
 from qbt.data.ingest_index import (
     ALL_A_INDEX_ID,
     ALL_A_INDEX_NAME,
@@ -30,6 +35,7 @@ __all__ = [
     "INDEX_SPECS",
     "ALL_A_INDEX_ID",
     "ALL_A_INDEX_NAME",
+    "BARRA_STYLE_MAPPING",
     "DEFAULT_INDEX_ID",
     "IndexSpec",
     "IngestConfig",
@@ -51,6 +57,8 @@ __all__ = [
     "ingest_index_membership",
     "ingest_prices",
     "load_official_benchmark",
+    "load_barra_style_exposures",
+    "load_barra_factor_returns",
     "load_price_panel",
     "load_single_stock",
     "price_limit_ratio",

@@ -241,6 +241,24 @@ def _returns_charts(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _alpha_beta_charts(alpha_beta) -> dict[str, Any]:
+    return {
+        "alpha_beta_contrib": _line_chart(
+            alpha_beta.contributions,
+            ("beta_contribution_cum", "alpha_contribution_cum"),
+        ),
+        "alpha_beta_rolling": _line_chart(
+            alpha_beta.rolling,
+            (
+                "rolling_beta",
+                "rolling_alpha_annual",
+                "rolling_r_squared",
+                "rolling_alpha_tstat_nw",
+            ),
+        ),
+    }
+
+
 def compare_run(run_dir: Path, benchmark_id: str, warehouse_dir: Path) -> dict[str, Any]:
     path = Path(run_dir) / "daily_returns.parquet"
     if not path.is_file():
@@ -292,6 +310,8 @@ def compare_run(run_dir: Path, benchmark_id: str, warehouse_dir: Path) -> dict[s
         },
         index=frame.index,
     )
+    charts = _returns_charts(frame)
+    charts.update(_alpha_beta_charts(alpha_beta))
     return _finite_json(
         {
             "benchmark": benchmark_meta,
@@ -303,6 +323,6 @@ def compare_run(run_dir: Path, benchmark_id: str, warehouse_dir: Path) -> dict[s
                     {"name": column, "values": nav[column].tolist()} for column in nav.columns
                 ],
             },
-            "charts": _returns_charts(frame),
+            "charts": charts,
         }
     )

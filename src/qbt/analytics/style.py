@@ -15,7 +15,7 @@ import pandas as pd
 
 from qbt.contracts.reports import StyleExposureReport
 
-__all__ = ["compute_style_exposure", "REQUIRED_STYLES"]
+__all__ = ["compute_style_exposure", "weighted_exposure", "REQUIRED_STYLES"]
 
 # 规范要求的完整风格集; 缺的显式标记, 不静默省略
 REQUIRED_STYLES = (
@@ -24,7 +24,7 @@ REQUIRED_STYLES = (
 )
 
 
-def _weighted_exposure(
+def weighted_exposure(
     weights: pd.DataFrame, exposure: pd.DataFrame
 ) -> tuple[pd.Series, pd.Series]:
     """按行做加权平均, 同时返回权重覆盖率。
@@ -77,9 +77,9 @@ def compute_style_exposure(
 
     for style in present:
         panel = style_panels[style].reindex(index=dates, columns=actual_weights.columns)
-        pf_e, pf_c = _weighted_exposure(actual_weights, panel)
+        pf_e, pf_c = weighted_exposure(actual_weights, panel)
         ix_panel = panel.reindex(index=dates, columns=index_weights.columns)
-        ix_e, ix_c = _weighted_exposure(index_weights.reindex(index=dates), ix_panel)
+        ix_e, ix_c = weighted_exposure(index_weights.reindex(index=dates), ix_panel)
         pf_cols[style] = pf_e
         ix_cols[style] = ix_e
         cov_rows.append(

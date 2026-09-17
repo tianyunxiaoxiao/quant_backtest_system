@@ -131,6 +131,11 @@ class BenchmarkComparisonTest(unittest.TestCase):
             embedded["charts"]["drawdown"]["series"][1]["values"],
             external["charts"]["drawdown"]["series"][1]["values"],
         )
+        self.assertNotEqual(
+            embedded["charts"]["alpha_beta_contrib"]["series"][0]["values"],
+            external["charts"]["alpha_beta_contrib"]["series"][0]["values"],
+        )
+        self.assertIn("alpha_beta_rolling", external["charts"])
         pd.testing.assert_frame_equal(original, after)
 
     def test_missing_benchmark_trading_date_is_rejected(self) -> None:

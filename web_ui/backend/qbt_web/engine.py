@@ -158,6 +158,7 @@ def run_backtest(run_id: str, params: dict[str, Any], output_dir: Path) -> dict[
             warehouse_dir=settings.warehouse_dir,
             index_source_dir=settings.index_source_dir,
             style_warmup_days=300,
+            barra_dir=settings.qbt_barra_dir,
         )
     )
     mark("portal_init")

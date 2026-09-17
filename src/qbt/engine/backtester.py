@@ -816,7 +816,12 @@ class LongOnlyFactorBacktester:
             if not executed.empty and "adv_participation" in executed
             else pd.Series(dtype="float64")
         )
-        adv_mask = adv_observed > cfg.max_adv_participation + 1e-9
+        adv_enabled = cfg.max_adv_participation is not None
+        adv_mask = (
+            adv_observed > cfg.max_adv_participation + 1e-9
+            if adv_enabled
+            else pd.Series(False, index=adv_observed.index, dtype="bool")
+        )
         adv_violation_rows = (
             executed.loc[adv_mask.index[adv_mask]].copy()
             if len(adv_observed) and adv_mask.any()
@@ -825,12 +830,16 @@ class LongOnlyFactorBacktester:
         reports.append(
             PortfolioConstraintReport(
                 constraint="max_adv_participation",
-                enabled=True,
+                enabled=adv_enabled,
                 limit=cfg.max_adv_participation,
                 n_checked=len(adv_observed),
                 n_violations=len(adv_violation_rows),
                 max_observed=float(adv_observed.max()) if len(adv_observed) else np.nan,
-                action=f"partial_fill; cap_bindings={adv_bindings}",
+                action=(
+                    f"partial_fill; cap_bindings={adv_bindings}"
+                    if adv_enabled
+                    else "disabled; observed_only"
+                ),
                 violations=adv_violation_rows,
             )
         )

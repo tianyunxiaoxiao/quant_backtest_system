@@ -112,7 +112,7 @@ class ConstraintConfig:
     max_industry_deviation: float | None = None      # 无行业分类数据, v1 关闭
     max_active_style_exposure: float | None = None   # 代理风格, v1 只监控不约束
     max_turnover: float | None = None
-    max_adv_participation: float = 0.10
+    max_adv_participation: float | None = None
     max_cash_ratio: float = 0.05
     force_sell_index_exits: bool = True              # 确认清单 C7
 
@@ -125,8 +125,10 @@ class ConstraintConfig:
             value = getattr(self, name)
             if value is not None and _finite(name, value) < 0:
                 raise ValueError(f"{name} 不能为负")
-        if not 0.0 < _finite("max_adv_participation", self.max_adv_participation) <= 1.0:
-            raise ValueError("max_adv_participation 必须落在 (0, 1]")
+        if self.max_adv_participation is not None and not 0.0 < _finite(
+            "max_adv_participation", self.max_adv_participation
+        ) <= 1.0:
+            raise ValueError("max_adv_participation 必须为 None 或落在 (0, 1]")
         if not 0.0 <= _finite("max_cash_ratio", self.max_cash_ratio) <= 1.0:
             raise ValueError("max_cash_ratio 必须落在 [0, 1]")
 
@@ -209,7 +211,7 @@ class ExecutionConfig:
     sell_before_buy: bool = True
     sell_proceeds_available_same_day: bool = True
     unfilled_policy: str = "cancel_at_close"
-    max_adv_participation: float = 0.10
+    max_adv_participation: float | None = None
     limit_touch_buffer: float = 0.005   # 距涨跌停 0.5 个百分点即视为不可交易 (B5)
     split_large_orders: bool = False
     max_split_days: int = 1
@@ -223,8 +225,10 @@ class ExecutionConfig:
             raise ValueError("整手数量必须为正整数")
         if self.unfilled_policy != "cancel_at_close":
             raise ValueError("v1 仅支持 unfilled_policy='cancel_at_close'")
-        if not 0.0 < _finite("max_adv_participation", self.max_adv_participation) <= 1.0:
-            raise ValueError("max_adv_participation 必须落在 (0, 1]")
+        if self.max_adv_participation is not None and not 0.0 < _finite(
+            "max_adv_participation", self.max_adv_participation
+        ) <= 1.0:
+            raise ValueError("max_adv_participation 必须为 None 或落在 (0, 1]")
         if not 0.0 <= _finite("limit_touch_buffer", self.limit_touch_buffer) < 1.0:
             raise ValueError("limit_touch_buffer 必须落在 [0, 1)")
         if self.max_split_days != 1:

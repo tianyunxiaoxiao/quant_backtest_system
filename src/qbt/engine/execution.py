@@ -390,7 +390,7 @@ class ExecutionEngine:
         allow_buy = self._allow_buy[ti]
         allow_sell = self._allow_sell[ti]
         adv = self._adv[ti]
-        max_part = float(cfg.execution.max_adv_participation)
+        max_part = cfg.execution.max_adv_participation
         order_id_prefix = day.strftime("%Y%m%d")
 
         # 估值基准: 用当日收盘前的最后有效价推总资产, 目标金额按该总资产计
@@ -541,7 +541,7 @@ class ExecutionEngine:
                                       "reason": why, "unfilled_quantity": qty_raw,
                                       "reference_price_raw": vwap_raw[j]})
                 continue
-            if not np.isfinite(adv[j]) or adv[j] <= 0:
+            if max_part is not None and (not np.isfinite(adv[j]) or adv[j] <= 0):
                 fills.append(self._reject(oid, asset, day, "sell", ref_price, qty_raw, "adv_missing"))
                 _record_fill(j, "sell", 0.0, np.nan, vwap_raw[j], "rejected", "adv_missing")
                 unfilled_rows.append({
@@ -689,7 +689,7 @@ class ExecutionEngine:
                                       "reference_price_raw": vwap_raw[j]})
                 continue
             fill_price_raw = self.costs.slippage_price(float(vwap_raw[j]), "buy")
-            if not np.isfinite(adv[j]) or adv[j] <= 0:
+            if max_part is not None and (not np.isfinite(adv[j]) or adv[j] <= 0):
                 fills.append(self._reject(oid, asset, day, "buy", ref_price, gap_raw, "adv_missing"))
                 _record_fill(j, "buy", 0.0, np.nan, vwap_raw[j], "rejected", "adv_missing")
                 unfilled_rows.append({
@@ -894,6 +894,8 @@ class ExecutionEngine:
     @staticmethod
     def _apply_adv(qty_raw, adv, price, max_part, lot, *, minimum: int, step: int):
         """ADV 参与率上限。返回 (可成交股数, 是否被截断)。"""
+        if max_part is None:
+            return qty_raw, False
         if not np.isfinite(adv) or adv <= 0 or not np.isfinite(price) or price <= 0:
             return 0.0, qty_raw > 0
         max_notional = adv * max_part

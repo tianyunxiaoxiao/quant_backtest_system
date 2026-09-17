@@ -21,7 +21,7 @@ from qbt.engine.execution import ExecutionEngine
 
 def _single_asset_execution(
     *, adjusted_price, raw_price, slippage_bps: float,
-    adv: float = 100_000_000.0, max_adv_participation: float = 1.0,
+    adv: float = 100_000_000.0, max_adv_participation: float | None = None,
     initial_capital: float = 10_000.0,
     asset_id: str = "A",
     target_values=(1.0, 0.0, 0.0),
@@ -456,7 +456,7 @@ def test_embedded_slippage_is_not_deducted_twice_from_cash():
     assert out.accounting_identity["residual"].abs().max() < 1e-9
 
 
-def test_missing_adv_rejects_instead_of_disabling_liquidity_cap(
+def test_missing_adv_does_not_block_when_liquidity_cap_is_disabled(
     small_price_frame, small_tradability, small_universe
 ):
     missing = pd.DataFrame(
@@ -482,9 +482,56 @@ def test_missing_adv_rejects_instead_of_disabling_liquidity_cap(
         rebalance_dates=(small_price_frame.dates[0],),
         initial_capital=1_000_000.0,
     )
+    assert any(fill.filled_quantity > 0 for fill in out.fills)
+    assert "adv_missing" not in {fill.reject_reason for fill in out.fills}
+
+
+def test_missing_adv_rejects_when_liquidity_cap_is_enabled(
+    small_price_frame, small_tradability, small_universe
+):
+    missing = pd.DataFrame(
+        np.nan, index=small_price_frame.dates, columns=small_price_frame.assets
+    )
+    cfg = LongOnlyFactorBacktestConfig(
+        execution=ExecutionConfig(
+            fill_price_field="adj_open", max_adv_participation=0.10
+        ),
+        constraints=ConstraintConfig(max_adv_participation=0.10),
+        weighting=WeightingConfig(cash_buffer=0.0),
+    )
+    engine = ExecutionEngine(
+        config=cfg,
+        prices=small_price_frame,
+        tradability=small_tradability,
+        liquidity=PortfolioLiquidityData(adv=missing),
+        index_universe=small_universe,
+    )
+    target = pd.DataFrame(
+        0.0, index=small_price_frame.dates, columns=small_price_frame.assets
+    )
+    target.iloc[0, 0] = 1.0
+    out = engine.run(
+        target_weights=target,
+        rebalance_dates=(small_price_frame.dates[0],),
+        initial_capital=1_000_000.0,
+    )
     assert not any(fill.filled_quantity > 0 for fill in out.fills)
     assert {fill.reject_reason for fill in out.fills} == {"adv_missing"}
     assert set(out.unfilled_summary["reason"]) == {"adv_missing"}
+
+
+def test_default_execution_does_not_cap_fills_by_adv():
+    out = _single_asset_execution(
+        adjusted_price=10.0,
+        raw_price=10.0,
+        slippage_bps=0.0,
+        adv=1_000.0,
+        initial_capital=1_000_000.0,
+    )
+    fill = next(fill for fill in out.fills if fill.filled_quantity > 0)
+    assert fill.filled_amount > 1_000.0
+    assert fill.status == "filled"
+    assert fill.reject_reason == ""
 
 
 def test_adv_cap_uses_slipped_execution_notional():

@@ -55,6 +55,8 @@ def test_default_config_matches_mentor_acceptance_scope():
     assert cfg.oos_start == date(2023, 1, 1)
     assert cfg.rebalance_frequency == "daily"
     assert cfg.execution.fill_price_field == "adj_vwap"
+    assert cfg.execution.max_adv_participation is None
+    assert cfg.constraints.max_adv_participation is None
 
 
 def test_request_requires_index_id():

@@ -101,7 +101,7 @@ class MarketPriceFrame:
     cash_dividend_per_share: pd.DataFrame | None = None
     split_ratio: pd.DataFrame | None = None
     price_basis: str = "backward_adjusted_from_provider"
-    fill_price_field: str = "adj_vwap"
+    fill_price_field: str = "adj_open"
     suspension_price_policy: str = "last_valid_close"
 
     _MATRICES = (

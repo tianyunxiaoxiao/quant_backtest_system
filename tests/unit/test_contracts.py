@@ -20,6 +20,9 @@ def test_clock_config_forbids_same_day_fill():
 
 
 def test_selection_fraction_validation():
+    assert SelectionConfig(selection_fraction=0.001).selection_fraction == 0.001
+    with pytest.raises(ValueError):
+        SelectionConfig(selection_fraction=0.0)
     with pytest.raises(ValueError):
         SelectionConfig(selection_fraction=1.5)
 
@@ -54,9 +57,11 @@ def test_default_config_matches_mentor_acceptance_scope():
     assert cfg.end_date == date(2026, 3, 31)
     assert cfg.oos_start == date(2023, 1, 1)
     assert cfg.rebalance_frequency == "daily"
-    assert cfg.execution.fill_price_field == "adj_vwap"
+    assert cfg.selection.selection_fraction == 0.10
+    assert cfg.execution.fill_price_field == "adj_open"
     assert cfg.execution.max_adv_participation is None
     assert cfg.constraints.max_adv_participation is None
+    assert cfg.costs.slippage_bps == 0.0
 
 
 def test_request_requires_index_id():

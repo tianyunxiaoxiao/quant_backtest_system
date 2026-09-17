@@ -61,8 +61,8 @@ class ClockConfig:
 class SelectionConfig:
     """选股口径 (规范 7.1, 确认清单 C1/C3/C4)。"""
 
-    selection_fraction: float = 0.30
-    # 30% 分母 = PIT 成分 ∩ T 日可交易 ∩ 因子有效 (C1)
+    selection_fraction: float = 0.10
+    # 10% 分母 = PIT 成分 ∩ T 日可交易 ∩ 因子有效 (C1)
     eligibility_requires_tradable: bool = True
     eligibility_requires_valid_factor: bool = True
     tie_break: str = "asset_id_asc"
@@ -165,7 +165,7 @@ class CostConfig:
         CostRate(date(2023, 8, 28), 0.0005),
     )
     stamp_duty_side: str = "sell"
-    slippage_bps: float = 12.0
+    slippage_bps: float = 0.0
     impact_model: str = "embedded_in_slippage"
 
     def __post_init__(self) -> None:
@@ -203,8 +203,8 @@ def _rate_at(schedule: tuple[CostRate, ...], on: date) -> float:
 class ExecutionConfig:
     """执行模型 (规范 8.2, 确认清单 B1/B2/B4/B5)。"""
 
-    # 确认清单 B1: 默认 T+1 全天 VWAP; 开盘价保留为敏感性对照。
-    fill_price_field: str = "adj_vwap"
+    # 默认 T+1 开盘成交; VWAP 和收盘价保留为敏感性对照。
+    fill_price_field: str = "adj_open"
     lot_size: int = 100
     star_market_lot_size: int = 200
     allow_odd_lot_sell: bool = True
@@ -276,7 +276,7 @@ class LongOnlyFactorBacktestConfig:
     start_date: date | None = date(2018, 1, 1)
     end_date: date | None = date(2026, 3, 31)
     oos_start: date | None = date(2023, 1, 1)
-    selection_fraction: float = 0.30
+    selection_fraction: float = 0.10
     weighting_method: str = "factor_strength"
     rebalance_frequency: str = "daily"
     signal_lag_days: int = 1

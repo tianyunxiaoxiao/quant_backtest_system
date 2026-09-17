@@ -150,7 +150,7 @@ def build_selection_report(
     adj_fill_price: pd.DataFrame,
     order_lag_days: int = 1,
     fill_lag_days: int = 0,
-    fill_price_field: str = "adj_vwap",
+    fill_price_field: str = "adj_open",
     fills: pd.DataFrame | None = None,
     factor_coverage: pd.Series | None = None,
     unfilled_summary: pd.DataFrame | None = None,

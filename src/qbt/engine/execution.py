@@ -71,11 +71,6 @@ def _buy_step(asset_id: str, config: LongOnlyFactorBacktestConfig) -> int:
     return 1 if _is_star_market(asset_id) or _is_bse(asset_id) else int(config.execution.lot_size)
 
 
-def _max_order_quantity(asset_id: str) -> int:
-    """Limit-order maximum for one exchange-valid child order."""
-    return 100_000 if _is_star_market(asset_id) else 1_000_000
-
-
 def _round_buy_quantity(quantity: float, minimum: int, step: int) -> float:
     """Round a desired buy quantity down to an exchange-valid order quantity."""
     if not np.isfinite(quantity) or quantity < minimum:
@@ -112,10 +107,6 @@ class ExecutionEngine:
         self._buy_steps = np.array(
             [_buy_step(a, config) for a in self.assets], dtype="int64"
         )
-        self._max_order_quantities = np.array(
-            [_max_order_quantity(a) for a in self.assets], dtype="int64"
-        )
-
         # numpy 视图, 循环里避免 pandas 索引开销
         self._adj_close = prices.adj_close.to_numpy(dtype="float64")
         self._raw_close = prices.raw_close.to_numpy(dtype="float64")
@@ -515,13 +506,12 @@ class ExecutionEngine:
             asset = self._assets_array[j]
             lot = self._lots[j]
             step = self._buy_steps[j]
-            max_order_qty = self._max_order_quantities[j]
             want_raw = 0.0 if exits[j] else float(raw_target_shares[j])
             delta_raw = float(raw_held[j]) - want_raw
             if delta_raw <= 0:
                 continue
             # 卖出按整手向下取整。只有一次成交能真正清零时才允许卖零股；
-            # 若 ADV/换手率/单笔上限会截断，截断后的部分成交仍必须是整手。
+            # 若 ADV/换手率会截断，截断后的部分成交仍必须是整手。
             full_exit = bool(exits[j] or want_raw <= 0)
             allow_odd = bool(cfg.execution.allow_odd_lot_sell and full_exit)
             if allow_odd:
@@ -530,11 +520,6 @@ class ExecutionEngine:
                 qty_raw = _round_buy_quantity(delta_raw, int(lot), int(step))
             if qty_raw <= 0:
                 continue
-            order_size_capped = qty_raw > max_order_qty
-            if order_size_capped:
-                qty_raw = _round_buy_quantity(
-                    float(max_order_qty), int(lot), int(step)
-                )
             reason = "index_exit_forced" if exits[j] else "rebalance_reduce"
             order_seq += 1
             ref_price = float(vwap_adj[j]) if tradable_price[j] else np.nan
@@ -634,27 +619,25 @@ class ExecutionEngine:
                 commission=fc.commission, stamp_duty=fc.stamp_duty,
                 transfer_fee=fc.transfer_fee, slippage_cost=fc.slippage_cost,
                 impact_cost=fc.impact_cost,
-                status="filled" if not (order_size_capped or capped or turnover_capped) else "partial",
+                status="filled" if not (capped or turnover_capped) else "partial",
                 reject_reason=(
                     "turnover_cap" if turnover_capped else (
-                        "adv_cap" if capped else (
-                            "order_size_cap" if order_size_capped else ""
-                        )
+                        "adv_cap" if capped else ""
                     )
                 ),
                 adv_participation=float(notional / adv[j]) if adv[j] and adv[j] > 0 else np.nan,
             ))
             _record_fill(
                 j, "sell", qty_raw, fill_price_raw, float(vwap_raw[j]),
-                "filled" if not (order_size_capped or capped or turnover_capped) else "partial",
+                "filled" if not (capped or turnover_capped) else "partial",
                 "turnover_cap" if turnover_capped else (
-                    "adv_cap" if capped else ("order_size_cap" if order_size_capped else "")
+                    "adv_cap" if capped else ""
                 ),
             )
-            if order_size_capped or capped or turnover_capped:
+            if capped or turnover_capped:
                 unfilled_rows.append({"date": day, "asset_id": asset, "side": "sell",
                                       "reason": "turnover_cap" if turnover_capped else (
-                                          "adv_cap" if capped else "order_size_cap"
+                                          "adv_cap" if capped else ""
                                       ),
                                       "unfilled_quantity": delta_raw - qty_raw,
                                       "reference_price_raw": vwap_raw[j]})
@@ -670,7 +653,6 @@ class ExecutionEngine:
             asset = self._assets_array[j]
             lot = self._lots[j]
             step = self._buy_steps[j]
-            max_order_qty = self._max_order_quantities[j]
             gap_raw = float(buy_gap[j])
             if gap_raw <= 0:
                 continue
@@ -698,11 +680,6 @@ class ExecutionEngine:
                 })
                 continue
             exchange_capped = exchange_qty < gap_raw - 1e-9
-            order_size_capped = exchange_qty > max_order_qty
-            if order_size_capped:
-                exchange_qty = _round_buy_quantity(
-                    float(max_order_qty), int(lot), int(step)
-                )
             blocked, why = self._blocked(ti, j, "buy", allow_buy, tradable_price)
             if blocked:
                 fills.append(self._reject(oid, asset, day, "buy", ref_price, gap_raw, why))
@@ -781,8 +758,7 @@ class ExecutionEngine:
             status = (
                 "filled"
                 if not (
-                    exchange_capped or order_size_capped or capped
-                    or cash_capped or turnover_capped
+                    exchange_capped or capped or cash_capped or turnover_capped
                 )
                 else "partial"
             )
@@ -800,10 +776,7 @@ class ExecutionEngine:
                         "adv_cap" if capped
                         else (
                             "insufficient_cash" if cash_capped
-                            else (
-                                "order_size_cap" if order_size_capped
-                                else ("lot_size_rounding" if exchange_capped else "")
-                            )
+                            else ("lot_size_rounding" if exchange_capped else "")
                         )
                     )
                 ),
@@ -816,10 +789,7 @@ class ExecutionEngine:
                     "adv_cap" if capped
                     else (
                         "insufficient_cash" if cash_capped
-                        else (
-                            "order_size_cap" if order_size_capped
-                            else ("lot_size_rounding" if exchange_capped else "")
-                        )
+                        else ("lot_size_rounding" if exchange_capped else "")
                     )
                 ),
             )
@@ -832,10 +802,7 @@ class ExecutionEngine:
                             "adv_cap" if capped
                             else (
                                 "insufficient_cash" if cash_capped
-                                else (
-                                    "order_size_cap" if order_size_capped
-                                    else "lot_size_rounding"
-                                )
+                                else "lot_size_rounding"
                             )
                         )
                     ),

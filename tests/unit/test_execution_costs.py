@@ -181,7 +181,7 @@ def test_star_partial_sell_below_minimum_is_not_submitted():
     assert out.holdings_shares.iloc[2, 0] == 1000.0
 
 
-def test_star_single_order_is_capped_at_exchange_maximum():
+def test_star_target_above_single_order_limit_is_filled_by_child_orders():
     out = _single_asset_execution(
         adjusted_price=1.0,
         raw_price=1.0,
@@ -189,9 +189,9 @@ def test_star_single_order_is_capped_at_exchange_maximum():
         asset_id="688001.SH",
         initial_capital=500_000.0,
     )
-    assert out.fills[0].filled_quantity == 100_000.0
-    assert out.fills[0].status == "partial"
-    assert out.fills[0].reject_reason == "order_size_cap"
+    assert out.fills[0].filled_quantity == 500_000.0
+    assert out.fills[0].status == "filled"
+    assert out.fills[0].reject_reason == ""
 
 
 def test_cost_model_buy_no_stamp_duty():

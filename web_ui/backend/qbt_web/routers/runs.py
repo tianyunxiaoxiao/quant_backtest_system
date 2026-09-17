@@ -12,7 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from qbt_web import db
 from qbt_web.auth import owns, principal_from_request
-from qbt_web.models import RunConfig, RunDetail, RunList
+from qbt_web.models import RunConfig, RunDetail, RunGroupAssignment, RunList
 from qbt_web.services.runner import cancel_run, execute_run, submit_run
 
 router = APIRouter(prefix="/api/runs")
@@ -33,6 +33,7 @@ def _record_to_out(record: db.RunRecord, *, include_config: bool = False) -> dic
         "id": record.id,
         "owner_user_id": record.owner_user_id,
         "owner_username": record.owner_username,
+        "group_id": record.group_id,
         "status": record.status,
         "factor_id": record.factor_id,
         "factor_name": config.get("factor_values_name") or config.get("factor_name"),
@@ -129,6 +130,22 @@ async def cancel(run_id: str, request: Request):
         raise HTTPException(status_code=409, detail=f"Run is already {status}")
     record = db.get_run(run_id)
     return _record_to_out(record, include_config=True)
+
+
+@router.patch("/{run_id}/group", response_model=RunDetail)
+async def update_run_group(run_id: str, payload: RunGroupAssignment, request: Request):
+    principal = principal_from_request(request)
+    record = db.get_run(run_id)
+    if record is None or not owns(principal, record.owner_user_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    if payload.group_id is not None:
+        group = db.get_run_group(payload.group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="分组不存在")
+    if not db.assign_run_group(run_id, payload.group_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    updated = db.get_run(run_id)
+    return _record_to_out(updated, include_config=True)
 
 
 @router.delete("/{run_id}")

@@ -48,7 +48,7 @@ export default function LineChart({ data, title, yLabel, height = 360, percentAx
   }, [data, title, yLabel, height, percentAxis])
 
   if (!data || !data.series || data.series.length === 0) {
-    return <div className="chart-card"><strong>{title}</strong><div className="empty-state">暂无数据</div></div>
+    return <div className="chart-card"><strong>{title}</strong><div className="empty-state">加载中...</div></div>
   }
 
   return (

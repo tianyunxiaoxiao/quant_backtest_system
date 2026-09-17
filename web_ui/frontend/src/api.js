@@ -51,9 +51,19 @@ export const fetchRun = (id) => api.get(`/runs/${id}`).then(r => r.data)
 export const createRun = (payload) => api.post('/runs', payload).then(r => r.data)
 export const cancelRun = (id) => api.post(`/runs/${id}/cancel`).then(r => r.data)
 export const deleteRun = (id) => api.delete(`/runs/${id}`).then(r => r.data)
+export const assignRunGroup = (id, groupId) =>
+  api.patch(`/runs/${id}/group`, { group_id: groupId }).then(r => r.data)
+export const fetchRunGroups = () => api.get('/run-groups').then(r => r.data.groups)
+export const createRunGroup = (name) => api.post('/run-groups', { name }).then(r => r.data)
+export const renameRunGroup = (id, name) => api.patch(`/run-groups/${id}`, { name }).then(r => r.data)
+export const deleteRunGroup = (id) => api.delete(`/run-groups/${id}`).then(r => r.data)
 export const fetchChartData = (id, chart) => api.get(`/runs/${id}/chart-data/${chart}`).then(r => r.data.data)
 export const fetchBenchmarkComparison = (id, benchmarkId) =>
   api.get(`/runs/${id}/comparison`, { params: { benchmark_id: benchmarkId } }).then(r => r.data)
+export const fetchStyleComparison = (id, benchmarkId) =>
+  api.get(`/runs/${id}/style-comparison`, { params: { benchmark_id: benchmarkId } }).then(r => r.data)
+export const fetchBarraAttribution = (id, benchmarkId) =>
+  api.get(`/runs/${id}/barra-attribution`, { params: { benchmark_id: benchmarkId } }).then(r => r.data)
 export const fetchReportMarkdown = (id) => api.get(`/runs/${id}/report.md`).then(r => r.data)
 export const fetchArtifacts = (id) => api.get(`/runs/${id}/artifacts`).then(r => r.data.artifacts)
 

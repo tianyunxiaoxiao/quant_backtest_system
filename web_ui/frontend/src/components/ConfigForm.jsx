@@ -30,6 +30,31 @@ const CloseIcon = () => (
   </svg>
 )
 
+const SearchIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m16 16 4 4" />
+  </svg>
+)
+
+const ChevronIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="m8 10 4 4 4-4" />
+  </svg>
+)
+
+const CheckIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="m5 12 4 4L19 6" />
+  </svg>
+)
+
+const FACTOR_KIND_LABELS = {
+  platform: '因子研究平台',
+  values: '已导入',
+  demo: '内置公式',
+}
+
 export default function ConfigForm({ onSubmitted, disabled }) {
   const [factors, setFactors] = useState([])
   const [indexes, setIndexes] = useState([])
@@ -38,7 +63,11 @@ export default function ConfigForm({ onSubmitted, disabled }) {
   const [uploadFile, setUploadFile] = useState(null)
   const [dragActive, setDragActive] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [factorPickerOpen, setFactorPickerOpen] = useState(false)
+  const [factorQuery, setFactorQuery] = useState('')
+  const [factorKindFilter, setFactorKindFilter] = useState('all')
   const fileRef = useRef(null)
+  const factorSearchRef = useRef(null)
   const [uploadForm, setUploadForm] = useState({
     name: '', direction: '1', source: '', value_type: 'factor_scores',
   })
@@ -54,12 +83,12 @@ export default function ConfigForm({ onSubmitted, disabled }) {
     end_date: '2026-03-31',
     rebalance_frequency: 'monthly',
     initial_capital: 100000000,
-    selection_fraction: 0.3,
+    selection_fraction: 0.1,
     weighting_method: 'factor_strength',
     max_single_weight: 0.05,
-    fill_price_field: 'adj_vwap',
+    fill_price_field: 'adj_open',
     // 交易费用: 滑点/佣金直接数值; 印花税/过户费以 % 输入, 留空 = 官方时变档位
-    slippage_bps: 12,
+    slippage_bps: 0,
     commission_rate: 0.025,      // %
     min_commission: 5,           // 元/笔
     stamp_duty_rate: '',         // % (空=时变)
@@ -93,9 +122,11 @@ export default function ConfigForm({ onSubmitted, disabled }) {
   }, [])
 
   useEffect(() => {
-    if (!importOpen) return undefined
+    if (!importOpen && !factorPickerOpen) return undefined
     const onKeyDown = (event) => {
-      if (event.key === 'Escape' && !uploading) setImportOpen(false)
+      if (event.key !== 'Escape') return
+      if (factorPickerOpen) setFactorPickerOpen(false)
+      else if (!uploading) setImportOpen(false)
     }
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -104,11 +135,15 @@ export default function ConfigForm({ onSubmitted, disabled }) {
       document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [importOpen, uploading])
+  }, [importOpen, factorPickerOpen, uploading])
 
-  const platformFactors = factors.filter(f => f.kind === 'platform')
+  useEffect(() => {
+    if (!factorPickerOpen) return undefined
+    const timer = window.setTimeout(() => factorSearchRef.current?.focus(), 0)
+    return () => window.clearTimeout(timer)
+  }, [factorPickerOpen])
+
   const importedFactors = factors.filter(f => f.kind === 'values')
-  const demoFactors = factors.filter(f => f.kind === 'demo')
   const selectedFactor = factors.find(f => f.factor_id === form.factor_id)
   const isValuesFactor = selectedFactor?.kind === 'values' || selectedFactor?.kind === 'platform'
   const isDirectWeights = isValuesFactor && selectedFactor?.value_type === 'target_weights'
@@ -121,8 +156,19 @@ export default function ConfigForm({ onSubmitted, disabled }) {
     return patch
   }
 
-  const handleFactorChange = (e) => {
-    const factorId = e.target.value
+  const normalizedFactorQuery = factorQuery.trim().toLocaleLowerCase('zh-CN')
+  const visibleFactors = factors.filter(f => {
+    if (factorKindFilter !== 'all' && f.kind !== factorKindFilter) return false
+    if (!normalizedFactorQuery) return true
+    return [f.name, f.factor_id, f.description]
+      .filter(Boolean)
+      .some(value => String(value).toLocaleLowerCase('zh-CN').includes(normalizedFactorQuery))
+  })
+  const visibleFactorGroups = ['platform', 'values', 'demo']
+    .map(kind => ({ kind, factors: visibleFactors.filter(f => f.kind === kind) }))
+    .filter(group => group.factors.length > 0)
+
+  const handleFactorChange = (factorId) => {
     const meta = factors.find(f => f.factor_id === factorId)
     const isValues = ['values', 'platform'].includes(meta?.kind)
     setForm(f => ({
@@ -135,6 +181,8 @@ export default function ConfigForm({ onSubmitted, disabled }) {
       lookback: needsLookback[factorId] ? needsLookback[factorId].default : undefined,
       ...clampDatesToFactor(meta),
     }))
+    setFactorPickerOpen(false)
+    setFactorQuery('')
   }
 
   const handleUpload = async (e) => {
@@ -238,31 +286,27 @@ export default function ConfigForm({ onSubmitted, disabled }) {
         <div className="config-grid">
           <div className="form-group field-span-6">
           <label>因子</label>
-          <select value={form.factor_id} onChange={handleFactorChange} disabled={disabled}>
-            {platformFactors.length > 0 && (
-              <optgroup label="因子研究平台">
-                {platformFactors.map(f => (
-                  <option key={`platform-${f.factor_id}`} value={f.factor_id}>
-                    {f.factor_id}{f.name ? ` · ${f.name}` : ''}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {importedFactors.length > 0 && (
-              <optgroup label="导入数据 (因子 / 权重)">
-                {importedFactors.map(f => (
-                  <option key={f.factor_id} value={f.factor_id}>
-                    {f.factor_id}{f.name ? ` · ${f.name}` : ''}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            <optgroup label="内置公式因子">
-              {demoFactors.map(f => (
-                <option key={f.factor_id} value={f.factor_id}>{f.factor_id}</option>
-              ))}
-            </optgroup>
-          </select>
+          <button
+            type="button"
+            className="factor-select-trigger"
+            onClick={() => {
+              setFactorQuery('')
+              setFactorKindFilter('all')
+              setFactorPickerOpen(true)
+            }}
+            disabled={disabled}
+            aria-haspopup="dialog"
+          >
+            <span className="factor-select-value">
+              <strong>{selectedFactor?.name || selectedFactor?.factor_id || '选择因子'}</strong>
+              <small>
+                {selectedFactor
+                  ? `${FACTOR_KIND_LABELS[selectedFactor.kind] || '因子'} · ${selectedFactor.factor_id}`
+                  : '点击打开因子列表'}
+              </small>
+            </span>
+            <span className="factor-select-chevron"><ChevronIcon /></span>
+          </button>
           {selectedFactor?.kind === 'values' && (
             <span className="field-hint">
               {isDirectWeights ? '目标权重' : '因子值'}区间 {selectedFactor.date_start} ~ {selectedFactor.date_end} · {isDirectWeights ? '持仓密度' : '覆盖率'} {selectedFactor.coverage_ratio != null ? `${(selectedFactor.coverage_ratio * 100).toFixed(2)}%` : '-'}
@@ -335,6 +379,110 @@ export default function ConfigForm({ onSubmitted, disabled }) {
           </div>
         </div>
       </section>
+
+      {factorPickerOpen && (
+        <div className="factor-picker-backdrop" onMouseDown={event => {
+          if (event.target === event.currentTarget) setFactorPickerOpen(false)
+        }}>
+          <div className="factor-picker-modal" role="dialog" aria-modal="true" aria-labelledby="factor-picker-title">
+            <div className="factor-picker-heading">
+              <div>
+                <h3 id="factor-picker-title">选择因子</h3>
+                <span>{factors.length} 个可用因子</span>
+              </div>
+              <button
+                type="button"
+                className="modal-close-button"
+                title="关闭"
+                aria-label="关闭因子选择窗口"
+                onClick={() => setFactorPickerOpen(false)}
+              >
+                <CloseIcon />
+              </button>
+            </div>
+
+            <div className="factor-picker-tools">
+              <label className="factor-search-field">
+                <SearchIcon />
+                <input
+                  ref={factorSearchRef}
+                  type="search"
+                  value={factorQuery}
+                  onChange={event => setFactorQuery(event.target.value)}
+                  placeholder="按因子名称或 ID 搜索"
+                  aria-label="搜索因子"
+                />
+                {factorQuery && (
+                  <button type="button" onClick={() => setFactorQuery('')} aria-label="清空搜索">
+                    <CloseIcon />
+                  </button>
+                )}
+              </label>
+              <div className="factor-kind-filter" role="group" aria-label="因子来源">
+                {[
+                  ['all', '全部'],
+                  ['platform', '因子平台'],
+                  ['values', '已导入'],
+                  ['demo', '内置'],
+                ].map(([kind, label]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    className={factorKindFilter === kind ? 'active' : ''}
+                    onClick={() => setFactorKindFilter(kind)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="factor-picker-results" aria-live="polite">
+              <div className="factor-results-count">找到 {visibleFactors.length} 个因子</div>
+              {visibleFactorGroups.map(group => (
+                <section className="factor-result-group" key={group.kind}>
+                  <h4>{FACTOR_KIND_LABELS[group.kind]}</h4>
+                  <div className="factor-result-list">
+                    {group.factors.map(factor => {
+                      const isSelected = factor.factor_id === form.factor_id
+                      const detailLabel = factor.value_type === 'target_weights'
+                        ? '目标权重'
+                        : factor.direction === -1 ? '越小越好' : factor.direction === 1 ? '越大越好' : null
+                      return (
+                        <button
+                          type="button"
+                          key={`${factor.kind}-${factor.factor_id}`}
+                          className={`factor-result-row ${isSelected ? 'selected' : ''}`}
+                          onClick={() => handleFactorChange(factor.factor_id)}
+                          aria-pressed={isSelected}
+                        >
+                          <span className="factor-result-identity">
+                            <strong>{factor.name || factor.factor_id}</strong>
+                            <small>{factor.factor_id}</small>
+                          </span>
+                          <span className="factor-result-meta">
+                            {factor.date_start && <small>{factor.date_start} ~ {factor.date_end}</small>}
+                          </span>
+                          {detailLabel && <span className="factor-result-type">{detailLabel}</span>}
+                          <span className="factor-result-check" aria-hidden="true">
+                            {isSelected && <CheckIcon />}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </section>
+              ))}
+              {visibleFactors.length === 0 && (
+                <div className="factor-picker-empty">
+                  <strong>没有匹配的因子</strong>
+                  <span>换一个名称、ID 或来源筛选试试</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {importOpen && (
         <div className="factor-import-backdrop" onMouseDown={e => {
@@ -494,7 +642,7 @@ export default function ConfigForm({ onSubmitted, disabled }) {
         ) : <>
         <div className="form-group field-span-3">
           <label>选股比例</label>
-          <input type="number" min={0.01} max={1} step={0.01} value={form.selection_fraction} onChange={e => setForm({ ...form, selection_fraction: e.target.value })} disabled={disabled} />
+          <input type="number" min={0} max={1} step="any" value={form.selection_fraction} onChange={e => setForm({ ...form, selection_fraction: e.target.value })} disabled={disabled} />
         </div>
         <div className="form-group field-span-3">
           <label>权重方法</label>
@@ -521,8 +669,8 @@ export default function ConfigForm({ onSubmitted, disabled }) {
         <div className="form-group field-span-4">
           <label>成交价字段</label>
           <select value={form.fill_price_field} onChange={e => setForm({ ...form, fill_price_field: e.target.value })} disabled={disabled}>
-            <option value="adj_vwap">VWAP (默认)</option>
-            <option value="adj_open">开盘价</option>
+            <option value="adj_open">开盘价 (默认)</option>
+            <option value="adj_vwap">VWAP</option>
             <option value="adj_close">收盘价</option>
           </select>
         </div>

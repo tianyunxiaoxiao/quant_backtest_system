@@ -39,15 +39,15 @@ class RunConfig(BaseModel):
     end_date: date = date(2026, 3, 31)
     rebalance_frequency: Literal["daily", "weekly", "monthly"] = "monthly"
     initial_capital: float = 100_000_000.0
-    selection_fraction: float = Field(0.30, ge=0.01, le=1.0)
+    selection_fraction: float = Field(0.10, gt=0.0, le=1.0)
     weighting_method: Literal["factor_strength", "equal_weight", "index_weight"] = "factor_strength"
     max_single_weight: float = Field(0.05, ge=0.0, le=1.0)
-    slippage_bps: float = Field(12.0, ge=0.0)
+    slippage_bps: float = Field(0.0, ge=0.0)
     commission_rate: float = Field(0.00025, ge=0.0)
     min_commission: float = Field(5.0, ge=0.0)
     stamp_duty_rate: float | None = Field(None, ge=0.0, le=0.01)
     transfer_fee_rate: float | None = Field(None, ge=0.0, le=0.001)
-    fill_price_field: Literal["adj_vwap", "adj_open", "adj_close"] = "adj_vwap"
+    fill_price_field: Literal["adj_vwap", "adj_open", "adj_close"] = "adj_open"
     lookback: int | None = None
     # 因子来源: demo = 内置公式因子; values = 外部导入的已计算因子值。
     factor_source: Literal["demo", "values", "platform"] = "demo"
@@ -61,6 +61,7 @@ class RunOut(BaseModel):
     id: str
     owner_user_id: int | None = None
     owner_username: str | None = None
+    group_id: int | None = None
     status: str
     factor_id: str
     factor_name: str | None = None
@@ -90,6 +91,31 @@ class RunList(BaseModel):
 class RunDetail(RunOut):
     config: dict[str, Any] | None
     artifact_dir: str | None
+
+
+class RunGroupCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+class RunGroupUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+class RunGroupAssignment(BaseModel):
+    group_id: int | None = None
+
+
+class RunGroupOut(BaseModel):
+    id: int
+    owner_user_id: int
+    owner_username: str | None = None
+    name: str
+    created_at: str
+    updated_at: str
+
+
+class RunGroupList(BaseModel):
+    groups: list[RunGroupOut]
 
 
 class ArtifactItem(BaseModel):

@@ -12,6 +12,10 @@ from typing import Any
 
 from qbt_web.config import settings
 
+DEFAULT_RUN_GROUP_NAME = "混沌"
+_DEFAULT_GROUP_MIGRATION_KEY = "runs_default_group_chaos_v1"
+_GLOBAL_GROUPS_MIGRATION_KEY = "run_groups_global_names_v1"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
@@ -36,6 +40,21 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT,
     cancelled_at TEXT,
     completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS run_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_user_id INTEGER NOT NULL,
+    owner_username TEXT,
+    name TEXT NOT NULL COLLATE NOCASE,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(owner_user_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS app_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS imported_factors (
@@ -105,6 +124,17 @@ class RunRecord:
     started_at: str | None
     cancelled_at: str | None
     completed_at: str | None
+    group_id: int | None
+
+
+@dataclass(frozen=True)
+class RunGroupRecord:
+    id: int
+    owner_user_id: int
+    owner_username: str | None
+    name: str
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -166,6 +196,7 @@ def init_db() -> None:
             ("cancelled_at", "TEXT"),
             ("owner_user_id", "INTEGER"),
             ("owner_username", "TEXT"),
+            ("group_id", "INTEGER"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {definition}")
@@ -182,6 +213,70 @@ def init_db() -> None:
             ):
                 if name not in table_columns:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        conn.execute("CREATE INDEX IF NOT EXISTS runs_group_id ON runs(group_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS run_groups_owner ON run_groups(owner_user_id, name)"
+        )
+        migration_done = conn.execute(
+            "SELECT 1 FROM app_metadata WHERE key = ?",
+            (_DEFAULT_GROUP_MIGRATION_KEY,),
+        ).fetchone()
+        if migration_done is None:
+            owners = conn.execute(
+                """
+                SELECT COALESCE(owner_user_id, 0) AS owner_user_id,
+                       MAX(owner_username) AS owner_username
+                FROM runs
+                GROUP BY COALESCE(owner_user_id, 0)
+                """
+            ).fetchall()
+            for owner in owners:
+                group_id = _ensure_default_run_group(
+                    conn,
+                    owner_user_id=int(owner["owner_user_id"]),
+                    owner_username=owner["owner_username"],
+                )
+                conn.execute(
+                    "UPDATE runs SET group_id = ? WHERE COALESCE(owner_user_id, 0) = ?",
+                    (group_id, owner["owner_user_id"]),
+                )
+            conn.execute(
+                "INSERT INTO app_metadata (key, value) VALUES (?, ?)",
+                (_DEFAULT_GROUP_MIGRATION_KEY, _now()),
+            )
+        global_migration_done = conn.execute(
+            "SELECT 1 FROM app_metadata WHERE key = ?",
+            (_GLOBAL_GROUPS_MIGRATION_KEY,),
+        ).fetchone()
+        if global_migration_done is None:
+            canonical_by_name: dict[str, int] = {}
+            groups = conn.execute(
+                "SELECT id, name FROM run_groups ORDER BY id"
+            ).fetchall()
+            for group in groups:
+                key = " ".join(group["name"].split()).casefold()
+                canonical_id = canonical_by_name.get(key)
+                if canonical_id is None:
+                    canonical_by_name[key] = int(group["id"])
+                    continue
+                conn.execute(
+                    "UPDATE runs SET group_id = ? WHERE group_id = ?",
+                    (canonical_id, group["id"]),
+                )
+                conn.execute("DELETE FROM run_groups WHERE id = ?", (group["id"],))
+            _ensure_default_run_group(
+                conn,
+                owner_user_id=0,
+                owner_username="system",
+            )
+            conn.execute(
+                "INSERT INTO app_metadata (key, value) VALUES (?, ?)",
+                (_GLOBAL_GROUPS_MIGRATION_KEY, _now()),
+            )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS run_groups_name_global "
+            "ON run_groups(name COLLATE NOCASE)"
+        )
         conn.commit()
 
 
@@ -191,6 +286,36 @@ def _now() -> str:
 
 def utc_now() -> str:
     return _now()
+
+
+def _ensure_default_run_group(
+    conn: sqlite3.Connection,
+    *,
+    owner_user_id: int,
+    owner_username: str | None,
+) -> int:
+    now = _now()
+    existing = conn.execute(
+        "SELECT id FROM run_groups WHERE name = ? COLLATE NOCASE",
+        (DEFAULT_RUN_GROUP_NAME,),
+    ).fetchone()
+    if existing is not None:
+        return int(existing["id"])
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO run_groups (
+            owner_user_id, owner_username, name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (owner_user_id, owner_username, DEFAULT_RUN_GROUP_NAME, now, now),
+    )
+    row = conn.execute(
+        "SELECT id FROM run_groups WHERE name = ? COLLATE NOCASE",
+        (DEFAULT_RUN_GROUP_NAME,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("Failed to create default run group")
+    return int(row["id"])
 
 
 def create_run(
@@ -206,6 +331,11 @@ def create_run(
     init_db()
     summary = config.get("business_summary", {})
     with _conn() as conn:
+        default_group_id = _ensure_default_run_group(
+            conn,
+            owner_user_id=owner_user_id if owner_user_id is not None else 0,
+            owner_username=owner_username,
+        )
         conn.execute(
             """
             INSERT INTO runs (
@@ -213,8 +343,8 @@ def create_run(
                 rebalance_frequency, initial_capital, selection_fraction,
                 weighting_method, max_single_weight, fill_price_field,
                 config_json, summary_json, error, artifact_dir, created_at,
-                started_at, cancelled_at, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, cancelled_at, completed_at, group_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -239,6 +369,7 @@ def create_run(
                 None,
                 None,
                 None,
+                default_group_id,
             ),
         )
         conn.commit()
@@ -335,6 +466,108 @@ def list_runs(limit: int = 200, *, owner_user_id: int | None = None) -> list[Run
                 (owner_user_id, limit),
             ).fetchall()
     return [RunRecord(**dict(r)) for r in rows]
+
+
+def list_run_groups(*, owner_user_id: int | None = None) -> list[RunGroupRecord]:
+    init_db()
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM run_groups ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    return [RunGroupRecord(**dict(row)) for row in rows]
+
+
+def get_run_group(group_id: int) -> RunGroupRecord | None:
+    init_db()
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM run_groups WHERE id = ?", (group_id,)).fetchone()
+    return None if row is None else RunGroupRecord(**dict(row))
+
+
+def create_run_group(
+    name: str,
+    *,
+    owner_user_id: int,
+    owner_username: str | None = None,
+) -> RunGroupRecord:
+    init_db()
+    now = _now()
+    with _conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO run_groups (owner_user_id, owner_username, name, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (owner_user_id, owner_username, name, now, now),
+        )
+        group_id = int(cursor.lastrowid)
+        conn.commit()
+    result = get_run_group(group_id)
+    if result is None:
+        raise RuntimeError("Failed to create run group")
+    return result
+
+
+def rename_run_group(group_id: int, name: str) -> bool:
+    with _conn() as conn:
+        current = conn.execute(
+            "SELECT name FROM run_groups WHERE id = ?", (group_id,)
+        ).fetchone()
+        if current is None or current["name"] == DEFAULT_RUN_GROUP_NAME:
+            return False
+        cursor = conn.execute(
+            "UPDATE run_groups SET name = ?, updated_at = ? WHERE id = ?",
+            (name, _now(), group_id),
+        )
+        conn.commit()
+    return cursor.rowcount == 1
+
+
+def delete_run_group(group_id: int) -> bool:
+    with _conn() as conn:
+        group = conn.execute(
+            "SELECT * FROM run_groups WHERE id = ?", (group_id,)
+        ).fetchone()
+        if group is None or group["name"] == DEFAULT_RUN_GROUP_NAME:
+            return False
+        default_group_id = _ensure_default_run_group(
+            conn,
+            owner_user_id=int(group["owner_user_id"]),
+            owner_username=group["owner_username"],
+        )
+        conn.execute(
+            "UPDATE runs SET group_id = ? WHERE group_id = ?",
+            (default_group_id, group_id),
+        )
+        cursor = conn.execute("DELETE FROM run_groups WHERE id = ?", (group_id,))
+        conn.commit()
+    return cursor.rowcount == 1
+
+
+def assign_run_group(run_id: str, group_id: int | None) -> bool:
+    with _conn() as conn:
+        if group_id is None:
+            run = conn.execute(
+                "SELECT owner_user_id, owner_username FROM runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                return False
+            group_id = _ensure_default_run_group(
+                conn,
+                owner_user_id=(
+                    int(run["owner_user_id"])
+                    if run["owner_user_id"] is not None
+                    else 0
+                ),
+                owner_username=run["owner_username"],
+            )
+        cursor = conn.execute(
+            "UPDATE runs SET group_id = ? WHERE id = ?",
+            (group_id, run_id),
+        )
+        conn.commit()
+    return cursor.rowcount == 1
 
 
 def fail_interrupted_runs() -> int:

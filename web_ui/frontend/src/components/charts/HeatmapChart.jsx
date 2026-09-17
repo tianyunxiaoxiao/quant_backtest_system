@@ -34,7 +34,7 @@ export default function HeatmapChart({ data, title, height = 360 }) {
   }, [data, title, height])
 
   if (!data || !data.values || data.values.length === 0) {
-    return <div className="chart-card"><strong>{title}</strong><div className="empty-state">暂无数据</div></div>
+    return <div className="chart-card"><strong>{title}</strong><div className="empty-state">加载中...</div></div>
   }
 
   return (

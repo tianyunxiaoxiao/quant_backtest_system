@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+
+from fastapi import HTTPException
 
 from qbt_web import db
+from qbt_web.auth import Principal
+from qbt_web.routers import run_groups
 from qbt_web.routers.runs import _record_to_out
 from qbt_web.services import runner
 
@@ -83,6 +89,7 @@ class RunLifecycleTest(unittest.TestCase):
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
         self.assertIn("started_at", columns)
         self.assertIn("cancelled_at", columns)
+        self.assertIn("group_id", columns)
 
     def test_pending_run_can_be_cancelled_without_worker(self) -> None:
         self.create_run()
@@ -160,6 +167,156 @@ class RunLifecycleTest(unittest.TestCase):
 
         self.assertEqual(output["owner_user_id"], 7)
         self.assertEqual(output["owner_username"], "alice")
+
+    def test_run_groups_are_global_and_persist_assignment(self) -> None:
+        self.create_run("alice-run", owner_user_id=7, owner_username="alice")
+        alpha = db.create_run_group(
+            "Alpha 研究", owner_user_id=7, owner_username="alice"
+        )
+        db.create_run_group("组合优化", owner_user_id=8, owner_username="bob")
+
+        self.assertEqual(
+            [group.name for group in db.list_run_groups(owner_user_id=7)],
+            ["Alpha 研究", "混沌", "组合优化"],
+        )
+        self.assertTrue(db.assign_run_group("alice-run", alpha.id))
+        self.assertEqual(db.get_run("alice-run").group_id, alpha.id)
+
+        self.assertTrue(db.rename_run_group(alpha.id, "Alpha 精选"))
+        self.assertEqual(db.get_run_group(alpha.id).name, "Alpha 精选")
+
+        self.assertTrue(db.delete_run_group(alpha.id))
+        reassigned = db.get_run("alice-run")
+        self.assertEqual(db.get_run_group(reassigned.group_id).name, "混沌")
+
+    def test_group_name_is_globally_unique(self) -> None:
+        db.create_run_group("研究", owner_user_id=7, owner_username="alice")
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.create_run_group("研究", owner_user_id=8, owner_username="bob")
+
+    def test_users_share_the_same_default_group(self) -> None:
+        alice = self.create_run(
+            "alice-run", owner_user_id=7, owner_username="alice"
+        )
+        bob = self.create_run("bob-run", owner_user_id=8, owner_username="bob")
+
+        self.assertEqual(alice.group_id, bob.group_id)
+        self.assertEqual(db.get_run_group(alice.group_id).name, "混沌")
+
+    def test_global_group_migration_merges_legacy_duplicates(self) -> None:
+        db.settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+        with db._conn() as conn:
+            conn.executescript(db.SCHEMA)
+            conn.execute("ALTER TABLE runs ADD COLUMN group_id INTEGER")
+            now = db.utc_now()
+            first = conn.execute(
+                """
+                INSERT INTO run_groups (owner_user_id, owner_username, name, created_at, updated_at)
+                VALUES (7, 'alice', '研究', ?, ?)
+                """,
+                (now, now),
+            ).lastrowid
+            second = conn.execute(
+                """
+                INSERT INTO run_groups (owner_user_id, owner_username, name, created_at, updated_at)
+                VALUES (8, 'bob', '研究', ?, ?)
+                """,
+                (now, now),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO runs (id, status, factor_id, index_id, owner_user_id, group_id) "
+                "VALUES ('alice-run', 'completed', 'f', 'ALL_A_EQ', 7, ?)",
+                (first,),
+            )
+            conn.execute(
+                "INSERT INTO runs (id, status, factor_id, index_id, owner_user_id, group_id) "
+                "VALUES ('bob-run', 'completed', 'f', 'ALL_A_EQ', 8, ?)",
+                (second,),
+            )
+            conn.execute(
+                "INSERT INTO app_metadata (key, value) VALUES (?, ?)",
+                (db._DEFAULT_GROUP_MIGRATION_KEY, now),
+            )
+            conn.commit()
+
+        db.init_db()
+
+        research_groups = [g for g in db.list_run_groups() if g.name == "研究"]
+        self.assertEqual(len(research_groups), 1)
+        self.assertEqual(db.get_run("alice-run").group_id, research_groups[0].id)
+        self.assertEqual(db.get_run("bob-run").group_id, research_groups[0].id)
+
+    def test_default_group_cannot_be_renamed_or_deleted(self) -> None:
+        record = self.create_run(
+            "alice-run", owner_user_id=7, owner_username="alice"
+        )
+
+        self.assertFalse(db.rename_run_group(record.group_id, "其他"))
+        self.assertFalse(db.delete_run_group(record.group_id))
+        self.assertEqual(db.get_run_group(record.group_id).name, "混沌")
+
+    def test_null_assignment_returns_run_to_default_group(self) -> None:
+        self.create_run("alice-run", owner_user_id=7, owner_username="alice")
+        research = db.create_run_group(
+            "研究", owner_user_id=7, owner_username="alice"
+        )
+        self.assertTrue(db.assign_run_group("alice-run", research.id))
+
+        self.assertTrue(db.assign_run_group("alice-run", None))
+
+        record = db.get_run("alice-run")
+        self.assertEqual(db.get_run_group(record.group_id).name, "混沌")
+
+    def test_new_run_is_assigned_to_default_chaos_group(self) -> None:
+        record = self.create_run(
+            "alice-run", owner_user_id=7, owner_username="alice"
+        )
+
+        group = db.get_run_group(record.group_id)
+
+        self.assertIsNotNone(group)
+        self.assertEqual(group.name, "混沌")
+        self.assertEqual(group.owner_user_id, 0)
+
+    def test_default_group_migration_moves_existing_runs_only_once(self) -> None:
+        self.create_run("alice-run", owner_user_id=7, owner_username="alice")
+        research = db.create_run_group(
+            "研究", owner_user_id=7, owner_username="alice"
+        )
+        self.assertTrue(db.assign_run_group("alice-run", research.id))
+        with db._conn() as conn:
+            conn.execute(
+                "DELETE FROM app_metadata WHERE key = ?",
+                (db._DEFAULT_GROUP_MIGRATION_KEY,),
+            )
+            conn.commit()
+
+        db.init_db()
+
+        migrated = db.get_run("alice-run")
+        self.assertEqual(db.get_run_group(migrated.group_id).name, "混沌")
+
+        self.assertTrue(db.assign_run_group("alice-run", research.id))
+        db.init_db()
+        self.assertEqual(db.get_run("alice-run").group_id, research.id)
+
+    def test_only_admin_can_manage_global_groups(self) -> None:
+        researcher_request = SimpleNamespace(
+            state=SimpleNamespace(
+                principal=Principal(7, "alice", "researcher", "csrf")
+            )
+        )
+        admin_request = SimpleNamespace(
+            state=SimpleNamespace(
+                principal=Principal(1, "admin", "admin", "csrf")
+            )
+        )
+
+        with self.assertRaises(HTTPException) as denied:
+            run_groups._require_admin(researcher_request)
+        self.assertEqual(denied.exception.status_code, 403)
+        self.assertTrue(run_groups._require_admin(admin_request).is_admin)
 
 
 if __name__ == "__main__":

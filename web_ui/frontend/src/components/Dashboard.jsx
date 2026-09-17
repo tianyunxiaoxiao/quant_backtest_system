@@ -2,11 +2,13 @@ import React, { useEffect, useState } from 'react'
 import {
   fetchArtifacts,
   fetchBenchmarkComparison,
+  fetchBarraAttribution,
   fetchBenchmarks,
   fetchChartData,
   fetchLatestPositions,
   fetchReportMarkdown,
   fetchRun,
+  fetchStyleComparison,
   positionsExportUrl,
 } from '../api'
 import LineChart from './charts/LineChart'
@@ -99,6 +101,30 @@ const formatDuration = (seconds) => {
   return [hours, minutes, secs].map(part => String(part).padStart(2, '0')).join(':')
 }
 
+const movingAverage = (values, window = 30) => {
+  const result = []
+  const queue = []
+  let sum = 0
+  let validCount = 0
+  for (const value of values || []) {
+    const numeric = Number.isFinite(value) ? value : null
+    queue.push(numeric)
+    if (numeric !== null) {
+      sum += numeric
+      validCount += 1
+    }
+    if (queue.length > window) {
+      const removed = queue.shift()
+      if (removed !== null) {
+        sum -= removed
+        validCount -= 1
+      }
+    }
+    result.push(queue.length === window && validCount === window ? sum / window : null)
+  }
+  return result
+}
+
 export default function Dashboard({ run, activeTab, now, onCancel }) {
   const [data, setData] = useState({})
   const [loading, setLoading] = useState({})
@@ -109,6 +135,8 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
   const [benchmarks, setBenchmarks] = useState([])
   const [benchmarkId, setBenchmarkId] = useState('ALL_A_EQ')
   const [comparisonError, setComparisonError] = useState('')
+  const [styleComparisonError, setStyleComparisonError] = useState('')
+  const [barraAttributionError, setBarraAttributionError] = useState('')
 
   useEffect(() => {
     if (!run) return
@@ -116,6 +144,8 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
     fetchRun(run.id).then(setFullRun)
     setBenchmarkId('ALL_A_EQ')
     setComparisonError('')
+    setStyleComparisonError('')
+    setBarraAttributionError('')
   }, [run?.id])
 
   useEffect(() => {
@@ -140,6 +170,40 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
         setLoading(l => ({ ...l, comparison: false }))
       })
   }, [run?.id, run?.status, benchmarkId, data])
+
+  useEffect(() => {
+    if (!run || run.status !== 'completed' || activeTab !== 'style') return
+    const key = `${run.id}-style-comparison-${benchmarkId}`
+    if (data[key]) return
+    setLoading(l => ({ ...l, styleComparison: true }))
+    setStyleComparisonError('')
+    fetchStyleComparison(run.id, benchmarkId)
+      .then(result => {
+        setData(prev => ({ ...prev, [key]: result }))
+        setLoading(l => ({ ...l, styleComparison: false }))
+      })
+      .catch(err => {
+        setStyleComparisonError(err.response?.data?.detail || err.message)
+        setLoading(l => ({ ...l, styleComparison: false }))
+      })
+  }, [run?.id, run?.status, activeTab, benchmarkId, data])
+
+  useEffect(() => {
+    if (!run || run.status !== 'completed' || activeTab !== 'alpha_beta') return
+    const key = `${run.id}-barra-attribution-${benchmarkId}`
+    if (data[key]) return
+    setLoading(l => ({ ...l, barraAttribution: true }))
+    setBarraAttributionError('')
+    fetchBarraAttribution(run.id, benchmarkId)
+      .then(result => {
+        setData(prev => ({ ...prev, [key]: result }))
+        setLoading(l => ({ ...l, barraAttribution: false }))
+      })
+      .catch(err => {
+        setBarraAttributionError(err.response?.data?.detail || err.message)
+        setLoading(l => ({ ...l, barraAttribution: false }))
+      })
+  }, [run?.id, run?.status, activeTab, benchmarkId, data])
 
   useEffect(() => {
     if (!run || run.status !== 'completed') return
@@ -196,17 +260,20 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
   const overviewNav = comparison?.nav || data[`${run.id}-nav`]
   const runConfig = fullRun?.config
 
+  const benchmarkLoading = loading.comparison
+    || (activeTab === 'style' && loading.styleComparison)
+    || (activeTab === 'alpha_beta' && loading.barraAttribution)
   const benchmarkToolbar = (
     <>
       <div className="benchmark-toolbar">
         <div>
           <span className="toolbar-label">对比基准</span>
-          <strong>{loading.comparison ? '加载中' : comparison?.benchmark?.name || '加载中'}</strong>
+          <strong>{benchmarkLoading ? '加载中' : comparison?.benchmark?.name || '加载中'}</strong>
         </div>
         <select
           value={benchmarkId}
           onChange={event => setBenchmarkId(event.target.value)}
-          disabled={loading.comparison}
+          disabled={benchmarkLoading}
           aria-label="对比基准"
         >
           {benchmarks.map(item => (
@@ -361,42 +428,60 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
           </>
         )
       case 'alpha_beta':
+        const selectedAlphaBeta = comparison?.summary || alphaBetaSummary
+        const barraAttribution = data[`${run.id}-barra-attribution-${benchmarkId}`]
         return (
           <>
-            {alphaBetaSummary && (
+            {benchmarkToolbar}
+            {selectedAlphaBeta && (
               <div className="metric-grid">
-                <div className="metric-card"><span>Alpha (年化)</span><strong>{fmtPct(alphaBetaSummary.alpha_annual)}</strong></div>
-                <div className="metric-card"><span>Beta</span><strong>{fmtNum(alphaBetaSummary.beta)}</strong></div>
-                <div className="metric-card"><span>Alpha t-stat (NW)</span><strong>{fmtNum(alphaBetaSummary.alpha_tstat_nw)}</strong></div>
-                <div className="metric-card"><span>R²</span><strong>{fmtNum(alphaBetaSummary.r_squared)}</strong></div>
+                <div className="metric-card"><span>Alpha (年化)</span><strong>{fmtPct(selectedAlphaBeta.alpha_annual)}</strong></div>
+                <div className="metric-card"><span>Beta</span><strong>{fmtNum(selectedAlphaBeta.beta)}</strong></div>
+                <div className="metric-card"><span>Alpha t-stat (NW)</span><strong>{fmtNum(selectedAlphaBeta.alpha_tstat_nw)}</strong></div>
+                <div className="metric-card"><span>R²</span><strong>{fmtNum(selectedAlphaBeta.r_squared)}</strong></div>
               </div>
             )}
+            {barraAttributionError && <div className="inline-error">Barra 收益归因失败：{barraAttributionError}</div>}
             <div className="chart-grid">
-              <LineChart data={data[`${run.id}-alpha_beta_contrib`]} title="Alpha / Beta 累计贡献" yLabel="累计收益" percentAxis />
-              <LineChart data={data[`${run.id}-alpha_beta_rolling`]} title="滚动 Alpha / Beta" />
+              <LineChart data={comparisonChart('alpha_beta_contrib')} title="Alpha / Beta 累计贡献" yLabel="累计收益" percentAxis />
+              <LineChart data={comparisonChart('alpha_beta_rolling')} title="滚动 Alpha / Beta" />
+              <LineChart
+                data={loading.barraAttribution ? null : barraAttribution?.chart}
+                title={`Barra风格收益 / 纯Alpha收益（${barraAttribution?.method?.styles?.length || 8}项风格）`}
+                yLabel="累计收益贡献"
+                percentAxis
+              />
             </div>
           </>
         )
       case 'style':
-        const styleTs = data[`${run.id}-style_timeseries`]
+        const styleComparison = data[`${run.id}-style-comparison-${benchmarkId}`]
+        const styleTs = loading.styleComparison
+          ? null
+          : styleComparison?.timeseries || data[`${run.id}-style_timeseries`]
         const hasValue = (arr) => arr && arr.some(v => v !== null && v !== undefined && Number.isFinite(v))
         const portfolioSeries = styleTs
           ? styleTs.styles
-              .map(s => ({ name: s, values: styleTs.portfolio[s] }))
+              .map(s => ({ name: s, values: movingAverage(styleTs.portfolio[s], 30) }))
               .filter(s => hasValue(s.values))
           : []
         const activeSeries = styleTs
           ? styleTs.styles
-              .map(s => ({ name: s, values: styleTs.active[s] }))
+              .map(s => ({ name: s, values: movingAverage(styleTs.active[s], 30) }))
               .filter(s => hasValue(s.values))
           : []
-        const styleSummary = data[`${run.id}-style_summary`]
+        const styleSummary = styleComparison?.summary || data[`${run.id}-style_summary`]
         return (
           <>
+            {benchmarkToolbar}
+            {styleComparisonError && <div className="inline-error">风格基准切换失败：{styleComparisonError}</div>}
             <div className="chart-grid">
-              <LineChart data={{ dates: styleTs ? styleTs.dates : [], series: portfolioSeries }} title="组合风格暴露" />
-              <LineChart data={{ dates: styleTs ? styleTs.dates : [], series: activeSeries }} title="主动风格暴露" />
-              <HeatmapChart data={data[`${run.id}-style_heatmap`]} title="年度平均主动风格暴露" />
+              <LineChart data={{ dates: styleTs ? styleTs.dates : [], series: portfolioSeries }} title="组合风格暴露 (30日MA)" />
+              <LineChart
+                data={{ dates: styleTs ? styleTs.dates : [], series: activeSeries }}
+                title={`主动风格暴露 vs ${comparison?.benchmark?.name || benchmarkId} (30日MA)`}
+              />
+              <HeatmapChart data={styleComparison?.heatmap || data[`${run.id}-style_heatmap`]} title="年度平均主动风格暴露" />
             </div>
             {styleSummary && (
               <div className="content-section">

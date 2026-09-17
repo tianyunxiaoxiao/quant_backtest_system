@@ -36,6 +36,7 @@ htmlcov/
 # Locally generated RQData warehouse
 warehouse_rqdata/
 warehouse_rqdata_*/
+warehouse/.qbt_file_hash_cache.json
 
 # Local release/input/output data generated during deployment validation
 data/benchmark_quotes_*/

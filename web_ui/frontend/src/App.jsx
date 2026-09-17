@@ -1,11 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
+  assignRunGroup,
   cancelRun,
+  createRunGroup,
+  deleteRunGroup,
   deleteRun,
   fetchCurrentUser,
   fetchRuns,
+  fetchRunGroups,
   login,
   logout,
+  renameRunGroup,
   setAuthenticatedUser,
 } from './api'
 import ConfigForm from './components/ConfigForm'
@@ -29,6 +34,7 @@ export default function App() {
   const [authState, setAuthState] = useState('loading')
   const [user, setUser] = useState(null)
   const [runs, setRuns] = useState([])
+  const [runGroups, setRunGroups] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [activeTab, setActiveTab] = useState('config')
   const [submitting, setSubmitting] = useState(false)
@@ -44,6 +50,14 @@ export default function App() {
       setRuns(data)
     } catch (err) {
       showToast('加载运行记录失败: ' + err.message, true)
+    }
+  }
+
+  const loadRunGroups = async () => {
+    try {
+      setRunGroups(await fetchRunGroups())
+    } catch (err) {
+      showToast('加载回测分组失败: ' + err.message, true)
     }
   }
 
@@ -68,6 +82,7 @@ export default function App() {
   useEffect(() => {
     if (authState !== 'authenticated') return undefined
     loadRuns()
+    loadRunGroups()
     pollRef.current = setInterval(loadRuns, 3000)
     const clock = setInterval(() => setNow(Date.now()), 1000)
     return () => {
@@ -87,6 +102,7 @@ export default function App() {
       await logout()
     } finally {
       setRuns([])
+      setRunGroups([])
       setSelectedId(null)
       setUser(null)
       setAuthState('anonymous')
@@ -152,6 +168,54 @@ export default function App() {
     }
   }
 
+  const handleCreateGroup = async (name) => {
+    try {
+      await createRunGroup(name)
+      await loadRunGroups()
+      showToast('分组已创建')
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message
+      showToast('创建分组失败: ' + message, true)
+      throw err
+    }
+  }
+
+  const handleRenameGroup = async (id, name) => {
+    try {
+      await renameRunGroup(id, name)
+      await loadRunGroups()
+      showToast('分组名称已更新')
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message
+      showToast('更新分组失败: ' + message, true)
+      throw err
+    }
+  }
+
+  const handleDeleteGroup = async (id) => {
+    try {
+      await deleteRunGroup(id)
+      await Promise.all([loadRunGroups(), loadRuns()])
+      showToast('分组已删除，回测结果已移至未分组')
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message
+      showToast('删除分组失败: ' + message, true)
+      throw err
+    }
+  }
+
+  const handleAssignGroup = async (runId, groupId) => {
+    try {
+      await assignRunGroup(runId, groupId)
+      await loadRuns()
+      showToast(groupId == null ? '已移出分组' : '回测结果分组已更新')
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message
+      showToast('更新结果分组失败: ' + message, true)
+      throw err
+    }
+  }
+
   const renderMain = () => {
     if (activeTab === 'config') {
       return (
@@ -180,8 +244,7 @@ export default function App() {
         <div className="brand">
           <span className="brand-mark">Q</span>
           <div>
-            <strong>量化回测可视化</strong>
-            <span>Long-Only Factor Backtest</span>
+            <strong>添橙Gaia量化回测平台</strong>
           </div>
         </div>
 
@@ -203,9 +266,11 @@ export default function App() {
             <strong>{user?.username}</strong>
             <span>{user?.role === 'admin' ? '管理员' : '研究员'}</span>
           </div>
-          <button className="primary-button" type="button" onClick={() => setActiveTab('config')} disabled={submitting}>
-            {submitting ? '运行中...' : '新建回测'}
-          </button>
+          {activeTab === 'config' && (
+            <button className="primary-button" type="button" onClick={() => setActiveTab('config')} disabled={submitting}>
+              {submitting ? '运行中...' : '新建回测'}
+            </button>
+          )}
           <button className="icon-button logout-button" type="button" onClick={handleLogout} title="退出登录" aria-label="退出登录">
             &#x21AA;
           </button>
@@ -215,11 +280,17 @@ export default function App() {
       <div className="app-shell">
         <RunList
           runs={runs}
+          groups={runGroups}
+          canManageGroups={user?.is_admin === true}
           selectedId={selectedId}
           onSelect={handleSelect}
           onRefresh={loadRuns}
           onDelete={handleDelete}
           onCancel={handleCancel}
+          onCreateGroup={handleCreateGroup}
+          onRenameGroup={handleRenameGroup}
+          onDeleteGroup={handleDeleteGroup}
+          onAssignGroup={handleAssignGroup}
           now={now}
         />
         <main className="workspace">{renderMain()}</main>

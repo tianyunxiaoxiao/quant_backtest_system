@@ -27,7 +27,7 @@ if qbt_src not in sys.path:
     sys.path.insert(0, qbt_src)
 
 from qbt_web import db  # noqa: E402
-from qbt_web.routers import artifacts, factor_values, meta, runs  # noqa: E402
+from qbt_web.routers import artifacts, factor_values, meta, run_groups, runs  # noqa: E402
 
 app = FastAPI(title=settings.app_name)
 
@@ -67,6 +67,7 @@ async def shared_authentication(request: Request, call_next):
 
 app.include_router(meta.router)
 app.include_router(runs.router)
+app.include_router(run_groups.router)
 app.include_router(artifacts.router)
 app.include_router(factor_values.router)
 

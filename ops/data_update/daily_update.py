@@ -252,6 +252,16 @@ def parser() -> argparse.ArgumentParser:
         default=Path("/opt/qbt/app/scripts/fetch_rqdata_corporate_actions.py"),
     )
     result.add_argument(
+        "--index-weight-script",
+        type=Path,
+        default=Path("/opt/qbt/app/scripts/fetch_rqdata_index_weights.py"),
+    )
+    result.add_argument(
+        "--index-weight-root",
+        type=Path,
+        default=Path("/data/research/index_membership"),
+    )
+    result.add_argument(
         "--validator-script",
         type=Path,
         default=Path("/opt/qbt/app/scripts/validate_data_release.py"),
@@ -281,6 +291,19 @@ def main() -> int:
             return 75
         env = os.environ.copy()
         target = args.target_date or latest_ready_date(args.python, env)
+        run(
+            [
+                str(args.python),
+                str(args.index_weight_script),
+                "--root",
+                str(args.index_weight_root),
+                "--start-date",
+                args.start_date.isoformat(),
+                "--end-date",
+                target.isoformat(),
+            ],
+            env=env,
+        )
         current_release = args.current.resolve()
         panel_meta = json.loads((current_release / "panel_shards" / "metadata.json").read_text())
         raw_meta = json.loads((current_release / "5minbar_unadjusted" / "metadata.json").read_text())

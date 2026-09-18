@@ -23,6 +23,11 @@ from qbt_web.services.style_comparison import compare_style_run
 router = APIRouter(prefix="/api/runs")
 
 
+def _index_weights_dir() -> Path | None:
+    path = settings.qbt_index_weights_dir
+    return path.resolve() if path is not None else None
+
+
 def _artifact_dir(run_id: str, request: Request) -> Path:
     record = db.get_run(run_id)
     if (
@@ -108,7 +113,7 @@ async def style_benchmark_comparison(
             benchmark_id,
             settings.warehouse_dir,
             barra_dir=settings.qbt_barra_dir,
-            index_weights_dir=settings.qbt_index_weights_dir,
+            index_weights_dir=_index_weights_dir(),
             index_source_dir=settings.index_source_dir,
         )
     except KeyError as exc:
@@ -130,7 +135,7 @@ async def get_barra_attribution(
             benchmark_id,
             settings.warehouse_dir,
             barra_dir=settings.qbt_barra_dir,
-            index_weights_dir=settings.qbt_index_weights_dir,
+            index_weights_dir=_index_weights_dir(),
             index_source_dir=settings.index_source_dir,
         )
     except KeyError as exc:

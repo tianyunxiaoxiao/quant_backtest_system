@@ -73,32 +73,55 @@ def ingest_index_membership(
     source_dir: Path, spec: IndexSpec, output_dir: Path | None = None
 ) -> tuple[pd.DataFrame, dict]:
     """读取月度快照, 返回 (长表[snapshot_date, asset_id, weight], 质量统计)。"""
-    files: list[Path] = []
-    for pattern in spec.file_patterns:
-        files.extend(sorted(Path(source_dir).glob(pattern)))
-    if not files:
-        raise FileNotFoundError(f"{spec.index_id} 没有匹配的成分文件: {spec.file_patterns}")
-
-    frames = []
-    for path in files:
-        df = pd.read_excel(path)
-        if _COL_DATE not in df.columns:
-            raise ValueError(f"{path.name} 缺少日期列; 现有列: {list(df.columns)}")
-        col_code, col_weight = _resolve_snapshot_columns(list(df.columns))
-        out = pd.DataFrame(
-            {
-                "snapshot_date": pd.to_datetime(df[_COL_DATE], errors="coerce"),
-                "asset_id": df[col_code].astype("string").str.strip().str.upper(),
-                "weight": pd.to_numeric(df[col_weight], errors="coerce") / 100.0,
-                "source_file": path.name,
-            }
-        )
-        if _COL_INDEX in df.columns:
-            codes = df[_COL_INDEX].dropna().astype(str).str.strip().unique()
-            if len(codes) and spec.index_id not in set(codes):
-                raise ValueError(f"{path.name} 指数代码 {codes[:3]} 与 {spec.index_id} 不符")
+    source_dir = Path(source_dir)
+    parquet_path = source_dir / f"{spec.index_id}_monthly.parquet"
+    files: list[Path]
+    frames: list[pd.DataFrame] = []
+    if parquet_path.is_file():
+        files = [parquet_path]
+        out = pd.read_parquet(parquet_path)
+        required = {"snapshot_date", "asset_id", "weight"}
+        missing = required - set(out.columns)
+        if missing:
+            raise ValueError(f"{parquet_path.name} 缺少字段: {sorted(missing)}")
+        out = out.copy()
+        out["snapshot_date"] = pd.to_datetime(out["snapshot_date"], errors="coerce")
+        out["asset_id"] = out["asset_id"].astype("string").str.strip().str.upper()
+        out["weight"] = pd.to_numeric(out["weight"], errors="coerce")
+        if "source_file" not in out:
+            out["source_file"] = parquet_path.name
+        out = out[["snapshot_date", "asset_id", "weight", "source_file"]]
         out = out[out["snapshot_date"].notna() & out["asset_id"].notna()]
         frames.append(out)
+    else:
+        files = []
+        for pattern in spec.file_patterns:
+            files.extend(sorted(source_dir.glob(pattern)))
+        if not files:
+            raise FileNotFoundError(
+                f"{spec.index_id} 没有匹配的成分数据: "
+                f"{parquet_path.name} 或 {spec.file_patterns}"
+            )
+
+        for path in files:
+            df = pd.read_excel(path)
+            if _COL_DATE not in df.columns:
+                raise ValueError(f"{path.name} 缺少日期列; 现有列: {list(df.columns)}")
+            col_code, col_weight = _resolve_snapshot_columns(list(df.columns))
+            out = pd.DataFrame(
+                {
+                    "snapshot_date": pd.to_datetime(df[_COL_DATE], errors="coerce"),
+                    "asset_id": df[col_code].astype("string").str.strip().str.upper(),
+                    "weight": pd.to_numeric(df[col_weight], errors="coerce") / 100.0,
+                    "source_file": path.name,
+                }
+            )
+            if _COL_INDEX in df.columns:
+                codes = df[_COL_INDEX].dropna().astype(str).str.strip().unique()
+                if len(codes) and spec.index_id not in set(codes):
+                    raise ValueError(f"{path.name} 指数代码 {codes[:3]} 与 {spec.index_id} 不符")
+            out = out[out["snapshot_date"].notna() & out["asset_id"].notna()]
+            frames.append(out)
 
     data = pd.concat(frames, ignore_index=True)
     data = data.drop_duplicates(subset=["snapshot_date", "asset_id"], keep="last")

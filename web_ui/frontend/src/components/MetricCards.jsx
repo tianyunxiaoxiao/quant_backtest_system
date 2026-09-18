@@ -20,11 +20,11 @@ export default function MetricCards({ summary }) {
     { label: '最大回撤', value: summary.max_drawdown, type: 'pct', positive: v => false },
     { label: '基准累计收益', value: summary.benchmark_total_return, type: 'pct' },
     { label: '超额累计收益', value: summary.excess_total_return_geometric, type: 'pct', positive: v => v > 0 },
+    { label: '超额年化', value: summary.excess_annual_return_geometric, type: 'pct', positive: v => v > 0 },
     { label: '超额夏普', value: summary.excess_sharpe, type: 'num', positive: v => v > 0 },
     { label: '超额最大回撤', value: summary.excess_max_drawdown, type: 'pct', positive: false },
     { label: '超额波动率', value: summary.excess_volatility, type: 'pct' },
     { label: '信息比率 IR', value: summary.information_ratio, type: 'num', positive: v => v > 0 },
-    { label: '年化 Alpha', value: summary.alpha_annual, type: 'pct', positive: v => v > 0 },
     { label: 'Beta', value: summary.beta, type: 'num' },
   ]
 

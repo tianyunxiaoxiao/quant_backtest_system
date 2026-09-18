@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import tempfile
@@ -11,7 +12,8 @@ from fastapi import HTTPException
 
 from qbt_web import db
 from qbt_web.auth import Principal
-from qbt_web.routers import run_groups
+from qbt_web.models import RunNameUpdate
+from qbt_web.routers import run_groups, runs
 from qbt_web.routers.runs import _record_to_out
 from qbt_web.services import runner
 
@@ -90,6 +92,7 @@ class RunLifecycleTest(unittest.TestCase):
         self.assertIn("started_at", columns)
         self.assertIn("cancelled_at", columns)
         self.assertIn("group_id", columns)
+        self.assertIn("display_name", columns)
 
     def test_pending_run_can_be_cancelled_without_worker(self) -> None:
         self.create_run()
@@ -167,6 +170,40 @@ class RunLifecycleTest(unittest.TestCase):
 
         self.assertEqual(output["owner_user_id"], 7)
         self.assertEqual(output["owner_username"], "alice")
+
+    def test_run_display_name_is_persisted_and_returned(self) -> None:
+        self.create_run("named-run", owner_user_id=7, owner_username="alice")
+
+        self.assertTrue(db.rename_run("named-run", "中证1000 UMR 日频"))
+        record = db.get_run("named-run")
+        output = _record_to_out(record)
+
+        self.assertEqual(record.display_name, "中证1000 UMR 日频")
+        self.assertEqual(output["display_name"], "中证1000 UMR 日频")
+        self.assertFalse(db.rename_run("missing-run", "不存在"))
+
+    def test_only_owner_or_admin_can_rename_run(self) -> None:
+        self.create_run("alice-run", owner_user_id=7, owner_username="alice")
+        alice_request = SimpleNamespace(
+            state=SimpleNamespace(principal=Principal(7, "alice", "researcher", "csrf"))
+        )
+        bob_request = SimpleNamespace(
+            state=SimpleNamespace(principal=Principal(8, "bob", "researcher", "csrf"))
+        )
+
+        updated = asyncio.run(
+            runs.update_run_name(
+                "alice-run", RunNameUpdate(display_name="  UMR   日频  "), alice_request
+            )
+        )
+        self.assertEqual(updated["display_name"], "UMR 日频")
+        with self.assertRaises(HTTPException) as denied:
+            asyncio.run(
+                runs.update_run_name(
+                    "alice-run", RunNameUpdate(display_name="越权修改"), bob_request
+                )
+            )
+        self.assertEqual(denied.exception.status_code, 404)
 
     def test_run_groups_are_global_and_persist_assignment(self) -> None:
         self.create_run("alice-run", owner_user_id=7, owner_username="alice")

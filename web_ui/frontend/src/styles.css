@@ -355,7 +355,7 @@ button { cursor: pointer; }
 
 .run-entry-actions {
   display: grid;
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: repeat(3, 1fr);
   gap: 3px;
 }
 
@@ -508,6 +508,29 @@ button { cursor: pointer; }
 .run-assignment-list button.active { border-color: var(--green); background: #edf5f0; }
 .run-assignment-list button i { width: 18px; color: var(--green); font-style: normal; font-weight: 800; }
 .run-assignment-list p { margin: 8px 4px 0; color: var(--muted); font-size: 11px; }
+
+.run-rename-modal { width: min(440px, calc(100vw - 32px)); }
+
+.run-rename-form {
+  display: grid;
+  gap: 10px;
+  padding: 20px 24px 24px;
+}
+
+.run-rename-form label { color: var(--muted); font-size: 11px; font-weight: 700; }
+.run-rename-form input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 0 11px;
+  background: white;
+  color: var(--text);
+  outline: none;
+}
+.run-rename-form input:focus { border-color: var(--green); box-shadow: 0 0 0 2px rgba(21, 105, 75, 0.12); }
+.run-rename-form > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.run-rename-form button { height: 34px; padding: 0 14px; border-radius: 4px; }
 
 .run-delete {
   min-width: 42px;

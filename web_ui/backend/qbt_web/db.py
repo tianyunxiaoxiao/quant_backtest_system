@@ -19,6 +19,7 @@ _GLOBAL_GROUPS_MIGRATION_KEY = "run_groups_global_names_v1"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
+    display_name TEXT,
     owner_user_id INTEGER,
     owner_username TEXT,
     status TEXT NOT NULL,
@@ -103,6 +104,7 @@ ON factor_versions(factor_id, created_at DESC);
 @dataclass(frozen=True)
 class RunRecord:
     id: str
+    display_name: str | None
     owner_user_id: int | None
     owner_username: str | None
     status: str
@@ -197,6 +199,7 @@ def init_db() -> None:
             ("owner_user_id", "INTEGER"),
             ("owner_username", "TEXT"),
             ("group_id", "INTEGER"),
+            ("display_name", "TEXT"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {definition}")
@@ -565,6 +568,16 @@ def assign_run_group(run_id: str, group_id: int | None) -> bool:
         cursor = conn.execute(
             "UPDATE runs SET group_id = ? WHERE id = ?",
             (group_id, run_id),
+        )
+        conn.commit()
+    return cursor.rowcount == 1
+
+
+def rename_run(run_id: str, display_name: str) -> bool:
+    with _conn() as conn:
+        cursor = conn.execute(
+            "UPDATE runs SET display_name = ? WHERE id = ?",
+            (display_name, run_id),
         )
         conn.commit()
     return cursor.rowcount == 1

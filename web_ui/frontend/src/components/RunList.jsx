@@ -30,6 +30,7 @@ const timingText = (run, now) => {
 
 const submitterText = (run) => run.owner_username ||
   (run.owner_user_id == null ? '未记录' : `用户 #${run.owner_user_id}`)
+const runTitle = (run) => run.display_name || run.factor_name || run.factor_id
 
 export default function RunList({
   runs,
@@ -44,6 +45,7 @@ export default function RunList({
   onRenameGroup,
   onDeleteGroup,
   onAssignGroup,
+  onRenameRun,
   now,
 }) {
   const [query, setQuery] = useState('')
@@ -52,6 +54,8 @@ export default function RunList({
   const [page, setPage] = useState(1)
   const [managerOpen, setManagerOpen] = useState(false)
   const [assignmentRunId, setAssignmentRunId] = useState(null)
+  const [renameRunId, setRenameRunId] = useState(null)
+  const [runName, setRunName] = useState('')
   const [newGroupName, setNewGroupName] = useState('')
   const [editingGroupId, setEditingGroupId] = useState(null)
   const [editingName, setEditingName] = useState('')
@@ -79,6 +83,7 @@ export default function RunList({
       if (!keyword) return true
       return [
         run.factor_name,
+        run.display_name,
         run.factor_id,
         run.index_id,
         submitterText(run),
@@ -90,6 +95,7 @@ export default function RunList({
   const pageCount = Math.max(1, Math.ceil(filteredRuns.length / PAGE_SIZE))
   const pageRuns = filteredRuns.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
   const assignmentRun = runs.find(run => run.id === assignmentRunId) || null
+  const renameTarget = runs.find(run => run.id === renameRunId) || null
   const assignmentGroups = assignmentRun
     ? groups
     : []
@@ -102,15 +108,16 @@ export default function RunList({
     }
   }, [groupFilter, displayGroups])
   useEffect(() => {
-    if (!managerOpen && !assignmentRunId) return undefined
+    if (!managerOpen && !assignmentRunId && !renameRunId) return undefined
     const onKeyDown = (event) => {
       if (event.key !== 'Escape' || working) return
       setManagerOpen(false)
       setAssignmentRunId(null)
+      setRenameRunId(null)
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [managerOpen, assignmentRunId, working])
+  }, [managerOpen, assignmentRunId, renameRunId, working])
 
   const submitNewGroup = async (event) => {
     event.preventDefault()
@@ -167,6 +174,22 @@ export default function RunList({
     }
   }
 
+  const saveRunName = async (event) => {
+    event.preventDefault()
+    const name = runName.trim()
+    if (!renameTarget || !name) return
+    setWorking(true)
+    try {
+      await onRenameRun(renameTarget.id, name)
+      setRenameRunId(null)
+      setRunName('')
+    } catch {
+      // Keep the dialog open so the name can be corrected.
+    } finally {
+      setWorking(false)
+    }
+  }
+
   return (
     <aside className="run-sidebar">
       <div className="sidebar-heading">
@@ -178,7 +201,7 @@ export default function RunList({
       </div>
 
       <div className="run-filters">
-        <input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索因子、股票池或提交人" aria-label="搜索回测结果" />
+        <input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索结果名、因子或提交人" aria-label="搜索回测结果" />
         <div className="run-filter-field">
           <label htmlFor="run-status-filter">状态筛选：</label>
           <select id="run-status-filter" value={status} onChange={event => setStatus(event.target.value)} aria-label="按状态筛选">
@@ -202,7 +225,7 @@ export default function RunList({
         {pageRuns.map(run => (
           <div className="run-entry" key={run.id}>
             <button type="button" className={`run-item ${run.id === selectedId ? 'active' : ''}`} onClick={() => onSelect(run.id)}>
-              <strong title={run.factor_id}>{run.factor_name || run.factor_id}</strong>
+              <strong title={run.display_name ? `${run.display_name} · ${run.factor_name || run.factor_id}` : run.factor_id}>{runTitle(run)}</strong>
               <div className="run-meta">
                 <span className={`run-state ${run.status}`}><i />{statusText[run.status] || run.status}</span>
                 <span>{run.index_id}</span>
@@ -215,6 +238,7 @@ export default function RunList({
               {timingText(run, now) && <div className="run-timing">{timingText(run, now)}</div>}
             </button>
             <div className="run-entry-actions">
+              <button type="button" onClick={() => { setRenameRunId(run.id); setRunName(runTitle(run)) }}>命名</button>
               <button type="button" onClick={() => setAssignmentRunId(run.id)}>分组</button>
               <button type="button" className={run.status === 'running' || run.status === 'pending' ? 'cancel' : 'delete'} onClick={() => run.status === 'running' || run.status === 'pending' ? onCancel(run.id) : onDelete(run.id)}>
                 {run.status === 'running' || run.status === 'pending' ? '取消' : '删除'}
@@ -268,7 +292,7 @@ export default function RunList({
         <div className="run-group-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !working) setAssignmentRunId(null) }}>
           <section className="run-group-modal run-assignment-modal" role="dialog" aria-modal="true" aria-labelledby="group-assignment-title">
             <header>
-              <div><span>结果分组</span><h2 id="group-assignment-title">{assignmentRun.factor_name || assignmentRun.factor_id}</h2></div>
+              <div><span>结果分组</span><h2 id="group-assignment-title">{runTitle(assignmentRun)}</h2></div>
               <button className="modal-close-button" type="button" onClick={() => setAssignmentRunId(null)} disabled={working} aria-label="关闭">×</button>
             </header>
             <div className="run-assignment-list">
@@ -277,6 +301,25 @@ export default function RunList({
               ))}
               {assignmentGroups.length === 0 && <p>请先在左上角创建分组。</p>}
             </div>
+          </section>
+        </div>
+      )}
+
+      {renameTarget && (
+        <div className="run-group-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !working) setRenameRunId(null) }}>
+          <section className="run-group-modal run-rename-modal" role="dialog" aria-modal="true" aria-labelledby="run-rename-title">
+            <header>
+              <div><span>结果名称</span><h2 id="run-rename-title">编辑回测结果名称</h2></div>
+              <button className="modal-close-button" type="button" onClick={() => setRenameRunId(null)} disabled={working} aria-label="关闭">×</button>
+            </header>
+            <form className="run-rename-form" onSubmit={saveRunName}>
+              <label htmlFor="run-display-name">名称</label>
+              <input id="run-display-name" value={runName} onChange={event => setRunName(event.target.value)} maxLength={80} autoFocus />
+              <div>
+                <button className="secondary-button" type="button" onClick={() => setRenameRunId(null)} disabled={working}>取消</button>
+                <button className="primary-button" type="submit" disabled={working || !runName.trim()}>保存</button>
+              </div>
+            </form>
           </section>
         </div>
       )}

@@ -681,9 +681,10 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
     <div className="view active">
       <div className="result-heading">
         <div>
-          <h1>{run.factor_name || run.factor_id} / {run.index_id}</h1>
+          <h1>{run.display_name || `${run.factor_name || run.factor_id} / ${run.index_id}`}</h1>
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-            {run.factor_name ? `${run.factor_id} · ` : ''}
+            {run.display_name && `${run.factor_name || run.factor_id} / ${run.index_id} · `}
+            {!run.display_name && run.factor_name ? `${run.factor_id} · ` : ''}
             {run.start_date} ~ {run.end_date} · {run.rebalance_frequency}
           </span>
         </div>

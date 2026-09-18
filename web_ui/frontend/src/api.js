@@ -53,6 +53,8 @@ export const cancelRun = (id) => api.post(`/runs/${id}/cancel`).then(r => r.data
 export const deleteRun = (id) => api.delete(`/runs/${id}`).then(r => r.data)
 export const assignRunGroup = (id, groupId) =>
   api.patch(`/runs/${id}/group`, { group_id: groupId }).then(r => r.data)
+export const renameRun = (id, displayName) =>
+  api.patch(`/runs/${id}/name`, { display_name: displayName }).then(r => r.data)
 export const fetchRunGroups = () => api.get('/run-groups').then(r => r.data.groups)
 export const createRunGroup = (name) => api.post('/run-groups', { name }).then(r => r.data)
 export const renameRunGroup = (id, name) => api.patch(`/run-groups/${id}`, { name }).then(r => r.data)

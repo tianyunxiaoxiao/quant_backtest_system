@@ -59,6 +59,7 @@ class RunConfig(BaseModel):
 
 class RunOut(BaseModel):
     id: str
+    display_name: str | None = None
     owner_user_id: int | None = None
     owner_username: str | None = None
     group_id: int | None = None
@@ -103,6 +104,10 @@ class RunGroupUpdate(BaseModel):
 
 class RunGroupAssignment(BaseModel):
     group_id: int | None = None
+
+
+class RunNameUpdate(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
 
 
 class RunGroupOut(BaseModel):

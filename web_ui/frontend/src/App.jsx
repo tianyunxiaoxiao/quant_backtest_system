@@ -10,6 +10,7 @@ import {
   fetchRunGroups,
   login,
   logout,
+  renameRun,
   renameRunGroup,
   setAuthenticatedUser,
 } from './api'
@@ -216,6 +217,18 @@ export default function App() {
     }
   }
 
+  const handleRenameRun = async (runId, displayName) => {
+    try {
+      await renameRun(runId, displayName)
+      await loadRuns()
+      showToast('回测结果名称已更新')
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message
+      showToast('更新结果名称失败: ' + message, true)
+      throw err
+    }
+  }
+
   const renderMain = () => {
     if (activeTab === 'config') {
       return (
@@ -291,6 +304,7 @@ export default function App() {
           onRenameGroup={handleRenameGroup}
           onDeleteGroup={handleDeleteGroup}
           onAssignGroup={handleAssignGroup}
+          onRenameRun={handleRenameRun}
           now={now}
         />
         <main className="workspace">{renderMain()}</main>

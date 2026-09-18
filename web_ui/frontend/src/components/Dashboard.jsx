@@ -16,6 +16,8 @@ import BarChart from './charts/BarChart'
 import HeatmapChart from './charts/HeatmapChart'
 import MetricCards from './MetricCards'
 
+const DEFAULT_REPORT_BENCHMARK_ID = '000852.SH'
+
 const fmtPct = (v) => {
   if (v === null || v === undefined || !Number.isFinite(v)) return 'NA'
   return `${(v * 100).toFixed(2)}%`
@@ -133,7 +135,7 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
   const [positions, setPositions] = useState(null)
   const [fullRun, setFullRun] = useState(null)
   const [benchmarks, setBenchmarks] = useState([])
-  const [benchmarkId, setBenchmarkId] = useState('ALL_A_EQ')
+  const [benchmarkId, setBenchmarkId] = useState(DEFAULT_REPORT_BENCHMARK_ID)
   const [comparisonError, setComparisonError] = useState('')
   const [styleComparisonError, setStyleComparisonError] = useState('')
   const [barraAttributionError, setBarraAttributionError] = useState('')
@@ -142,7 +144,7 @@ export default function Dashboard({ run, activeTab, now, onCancel }) {
     if (!run) return
     setFullRun(null)
     fetchRun(run.id).then(setFullRun)
-    setBenchmarkId('ALL_A_EQ')
+    setBenchmarkId(DEFAULT_REPORT_BENCHMARK_ID)
     setComparisonError('')
     setStyleComparisonError('')
     setBarraAttributionError('')

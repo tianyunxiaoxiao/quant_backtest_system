@@ -18,6 +18,7 @@ from qbt.contracts import RegressionConfig
 
 RUN_BENCHMARK_ID = "ALL_A_EQ"
 RUN_BENCHMARK_NAME = "流动性过滤后的非 ST A 股"
+DEFAULT_REPORT_BENCHMARK_ID = "000852.SH"
 _BENCHMARK_INDEPENDENT_METRICS = (
     "turnover_annual_oneway",
     "total_cost",

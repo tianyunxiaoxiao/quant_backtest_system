@@ -16,7 +16,7 @@ from qbt_web.auth import owns, principal_from_request
 from qbt_web.config import settings
 from qbt_web.models import ArtifactList, ChartData
 from qbt_web.services import chartdata
-from qbt_web.services.benchmark_comparison import compare_run
+from qbt_web.services.benchmark_comparison import DEFAULT_REPORT_BENCHMARK_ID, compare_run
 from qbt_web.services.barra_attribution import barra_style_attribution
 from qbt_web.services.style_comparison import compare_style_run
 
@@ -89,7 +89,7 @@ async def get_chart_data(run_id: str, chart: str, request: Request):
 async def benchmark_comparison(
     run_id: str,
     request: Request,
-    benchmark_id: str = "ALL_A_EQ",
+    benchmark_id: str = DEFAULT_REPORT_BENCHMARK_ID,
 ):
     root = _artifact_dir(run_id, request)
     try:
@@ -104,7 +104,7 @@ async def benchmark_comparison(
 async def style_benchmark_comparison(
     run_id: str,
     request: Request,
-    benchmark_id: str = "ALL_A_EQ",
+    benchmark_id: str = DEFAULT_REPORT_BENCHMARK_ID,
 ):
     root = _artifact_dir(run_id, request)
     try:
@@ -126,7 +126,7 @@ async def style_benchmark_comparison(
 async def get_barra_attribution(
     run_id: str,
     request: Request,
-    benchmark_id: str = "ALL_A_EQ",
+    benchmark_id: str = DEFAULT_REPORT_BENCHMARK_ID,
 ):
     root = _artifact_dir(run_id, request)
     try:

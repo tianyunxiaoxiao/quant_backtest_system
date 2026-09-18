@@ -1,15 +1,35 @@
 from __future__ import annotations
 
+import inspect
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import pandas as pd
-from qbt_web.services.benchmark_comparison import compare_run, list_benchmarks
+from qbt_web.services.benchmark_comparison import (
+    DEFAULT_REPORT_BENCHMARK_ID,
+    compare_run,
+    list_benchmarks,
+)
+from qbt_web.routers.artifacts import (
+    benchmark_comparison,
+    get_barra_attribution,
+    style_benchmark_comparison,
+)
 
 
 class BenchmarkComparisonTest(unittest.TestCase):
+    def test_default_report_benchmark_is_csi_1000(self) -> None:
+        self.assertEqual(DEFAULT_REPORT_BENCHMARK_ID, "000852.SH")
+        for endpoint in (
+            benchmark_comparison,
+            style_benchmark_comparison,
+            get_barra_attribution,
+        ):
+            default = inspect.signature(endpoint).parameters["benchmark_id"].default
+            self.assertEqual(default, DEFAULT_REPORT_BENCHMARK_ID)
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)

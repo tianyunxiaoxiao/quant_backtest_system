@@ -297,6 +297,8 @@ def compare_run(run_dir: Path, benchmark_id: str, warehouse_dir: Path) -> dict[s
     summary = dict(performance)
     summary.update(
         {
+            "excess_sharpe": performance.get("information_ratio"),
+            "excess_volatility": performance.get("tracking_error"),
             "alpha_annual": _finite_json(alpha_beta.alpha_annual),
             "beta": _finite_json(alpha_beta.beta),
             "alpha_tstat_nw": _finite_json(alpha_beta.alpha_tstat_nw),

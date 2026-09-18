@@ -137,6 +137,15 @@ class BenchmarkComparisonTest(unittest.TestCase):
             external["summary"]["benchmark_total_return"],
         )
         self.assertNotEqual(embedded["summary"]["beta"], external["summary"]["beta"])
+        self.assertEqual(
+            external["summary"]["excess_sharpe"],
+            external["summary"]["information_ratio"],
+        )
+        self.assertEqual(
+            external["summary"]["excess_volatility"],
+            external["summary"]["tracking_error"],
+        )
+        self.assertLessEqual(external["summary"]["excess_max_drawdown"], 0.0)
         self.assertEqual(external["nav"]["series"][1]["values"][0], 0.0)
         self.assertNotEqual(
             embedded["charts"]["monthly"]["series"][1]["values"],

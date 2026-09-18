@@ -123,6 +123,21 @@ class RunGroupList(BaseModel):
     groups: list[RunGroupOut]
 
 
+class RunGroupStatisticsRow(BaseModel):
+    id: str
+    display_name: str
+    rebalance_frequency: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    metrics: dict[str, float | None]
+    error: str | None = None
+
+
+class RunGroupStatistics(BaseModel):
+    benchmark_id: str
+    rows: list[RunGroupStatisticsRow]
+
+
 class ArtifactItem(BaseModel):
     name: str
     path: str

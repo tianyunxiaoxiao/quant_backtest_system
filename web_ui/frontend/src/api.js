@@ -56,6 +56,13 @@ export const assignRunGroup = (id, groupId) =>
 export const renameRun = (id, displayName) =>
   api.patch(`/runs/${id}/name`, { display_name: displayName }).then(r => r.data)
 export const fetchRunGroups = () => api.get('/run-groups').then(r => r.data.groups)
+export const fetchGroupStatistics = (benchmarkId, groupIds = null) =>
+  api.get('/run-groups/statistics', {
+    params: {
+      benchmark_id: benchmarkId,
+      ...(groupIds?.length ? { group_ids: groupIds.join(',') } : {}),
+    },
+  }).then(r => r.data)
 export const createRunGroup = (name) => api.post('/run-groups', { name }).then(r => r.data)
 export const renameRunGroup = (id, name) => api.patch(`/run-groups/${id}`, { name }).then(r => r.data)
 export const deleteRunGroup = (id) => api.delete(`/run-groups/${id}`).then(r => r.data)

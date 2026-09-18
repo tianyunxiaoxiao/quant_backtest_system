@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   assignRunGroup,
   cancelRun,
@@ -16,11 +16,14 @@ import {
 } from './api'
 import ConfigForm from './components/ConfigForm'
 import Dashboard from './components/Dashboard'
+import GroupStatistics from './components/GroupStatistics'
 import RunList from './components/RunList'
+import { buildDisplayGroups } from './runGroups'
 
 const tabs = [
   { id: 'config', label: '新建回测' },
   { id: 'overview', label: '回测结果' },
+  { id: 'group_statistics', label: '分组统计' },
   { id: 'returns', label: '收益分析' },
   { id: 'alpha_beta', label: 'Alpha / Beta' },
   { id: 'style', label: '风格暴露' },
@@ -36,6 +39,7 @@ export default function App() {
   const [user, setUser] = useState(null)
   const [runs, setRuns] = useState([])
   const [runGroups, setRunGroups] = useState([])
+  const [groupFilter, setGroupFilter] = useState('all')
   const [selectedId, setSelectedId] = useState(null)
   const [activeTab, setActiveTab] = useState('config')
   const [submitting, setSubmitting] = useState(false)
@@ -44,6 +48,10 @@ export default function App() {
   const pollRef = useRef(null)
 
   const selectedRun = runs.find(r => r.id === selectedId) || null
+  const displayGroups = useMemo(() => buildDisplayGroups(runGroups), [runGroups])
+  const statisticsGroup = groupFilter === 'all'
+    ? null
+    : displayGroups.find(group => String(group.id) === groupFilter) || null
 
   const loadRuns = async () => {
     try {
@@ -104,6 +112,7 @@ export default function App() {
     } finally {
       setRuns([])
       setRunGroups([])
+      setGroupFilter('all')
       setSelectedId(null)
       setUser(null)
       setAuthState('anonymous')
@@ -240,6 +249,9 @@ export default function App() {
         </div>
       )
     }
+    if (activeTab === 'group_statistics') {
+      return <GroupStatistics group={statisticsGroup} onSelectRun={handleSelect} />
+    }
     return <Dashboard run={selectedRun} activeTab={activeTab} now={now} onCancel={handleCancel} />
   }
 
@@ -294,6 +306,9 @@ export default function App() {
         <RunList
           runs={runs}
           groups={runGroups}
+          displayGroups={displayGroups}
+          groupFilter={groupFilter}
+          onGroupFilterChange={setGroupFilter}
           canManageGroups={user?.is_admin === true}
           selectedId={selectedId}
           onSelect={handleSelect}

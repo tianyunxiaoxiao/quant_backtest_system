@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 
 const PAGE_SIZE = 10
-const DEFAULT_GROUP_NAME = '混沌'
 
 const statusText = {
   pending: '排队中',
@@ -35,6 +34,9 @@ const runTitle = (run) => run.display_name || run.factor_name || run.factor_id
 export default function RunList({
   runs,
   groups,
+  displayGroups,
+  groupFilter,
+  onGroupFilterChange,
   canManageGroups,
   selectedId,
   onSelect,
@@ -50,7 +52,6 @@ export default function RunList({
 }) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
-  const [groupFilter, setGroupFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [managerOpen, setManagerOpen] = useState(false)
   const [assignmentRunId, setAssignmentRunId] = useState(null)
@@ -62,15 +63,6 @@ export default function RunList({
   const [working, setWorking] = useState(false)
 
   const groupMap = useMemo(() => new Map(groups.map(group => [group.id, group])), [groups])
-  const displayGroups = useMemo(() => {
-    const chaosGroups = groups.filter(group => group.name === DEFAULT_GROUP_NAME)
-    const otherGroups = groups.filter(group => group.name !== DEFAULT_GROUP_NAME)
-    if (chaosGroups.length === 0) return otherGroups.map(group => ({ ...group, ids: [group.id] }))
-    return [
-      { ...chaosGroups[0], ids: chaosGroups.map(group => group.id), isDefault: true },
-      ...otherGroups.map(group => ({ ...group, ids: [group.id] })),
-    ]
-  }, [groups])
 
   const filteredRuns = useMemo(() => {
     const keyword = query.trim().toLowerCase()
@@ -104,9 +96,9 @@ export default function RunList({
   useEffect(() => setPage(current => Math.min(current, pageCount)), [pageCount])
   useEffect(() => {
     if (groupFilter !== 'all' && !displayGroups.some(group => String(group.id) === groupFilter)) {
-      setGroupFilter('all')
+      onGroupFilterChange('all')
     }
-  }, [groupFilter, displayGroups])
+  }, [groupFilter, displayGroups, onGroupFilterChange])
   useEffect(() => {
     if (!managerOpen && !assignmentRunId && !renameRunId) return undefined
     const onKeyDown = (event) => {
@@ -211,7 +203,7 @@ export default function RunList({
         </div>
         <div className="run-filter-field">
           <label htmlFor="run-group-filter">分组选择：</label>
-          <select id="run-group-filter" value={groupFilter} onChange={event => setGroupFilter(event.target.value)} aria-label="按分组筛选">
+          <select id="run-group-filter" value={groupFilter} onChange={event => onGroupFilterChange(event.target.value)} aria-label="按分组筛选">
             <option value="all">全部分组</option>
             {displayGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
           </select>

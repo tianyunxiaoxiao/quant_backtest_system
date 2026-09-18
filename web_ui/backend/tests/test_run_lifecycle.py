@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
@@ -354,6 +355,49 @@ class RunLifecycleTest(unittest.TestCase):
             run_groups._require_admin(researcher_request)
         self.assertEqual(denied.exception.status_code, 403)
         self.assertTrue(run_groups._require_admin(admin_request).is_admin)
+
+    def test_group_statistics_only_returns_completed_visible_runs(self) -> None:
+        selected = db.create_run_group(
+            "统计组", owner_user_id=1, owner_username="admin"
+        )
+        completed = self.create_run(
+            "completed-run", owner_user_id=7, owner_username="alice"
+        )
+        failed = self.create_run(
+            "failed-run", owner_user_id=7, owner_username="alice"
+        )
+        hidden = self.create_run(
+            "hidden-run", owner_user_id=8, owner_username="bob"
+        )
+        for record in (completed, failed, hidden):
+            db.assign_run_group(record.id, selected.id)
+        db.update_status("completed-run", "completed", summary={"sharpe": 1.2})
+        db.update_status("failed-run", "failed")
+        db.update_status("hidden-run", "completed", summary={"sharpe": 2.4})
+        request = SimpleNamespace(
+            state=SimpleNamespace(
+                principal=Principal(7, "alice", "researcher", "csrf")
+            )
+        )
+        summary = {key: 0.1 for key in run_groups._STATISTIC_KEYS}
+
+        with patch.object(
+            run_groups,
+            "compare_run",
+            return_value={"summary": summary},
+        ) as compare:
+            result = asyncio.run(
+                run_groups.group_statistics(
+                    request,
+                    benchmark_id="000852.SH",
+                    group_ids=str(selected.id),
+                )
+            )
+
+        self.assertEqual(result["benchmark_id"], "000852.SH")
+        self.assertEqual([row["id"] for row in result["rows"]], ["completed-run"])
+        self.assertEqual(result["rows"][0]["metrics"]["sharpe"], 0.1)
+        compare.assert_called_once()
 
 
 if __name__ == "__main__":

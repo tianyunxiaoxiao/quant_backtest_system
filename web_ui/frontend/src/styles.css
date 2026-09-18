@@ -949,11 +949,11 @@ button { cursor: pointer; }
 .group-statistics-heading > div > span,
 .group-statistics-heading label > span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 720;
 }
-.group-statistics-heading h1 { margin: 4px 0 2px; font-size: 22px; letter-spacing: 0; }
-.group-statistics-heading p { margin: 0; color: var(--muted); font-size: 11px; }
+.group-statistics-heading h1 { margin: 4px 0 2px; font-size: 24px; letter-spacing: 0; }
+.group-statistics-heading p { margin: 0; color: var(--muted); font-size: 13px; }
 .group-statistics-heading label { display: grid; gap: 6px; }
 .group-statistics-heading select {
   width: min(320px, 42vw);
@@ -963,6 +963,7 @@ button { cursor: pointer; }
   border-radius: 4px;
   background: white;
   color: var(--text);
+  font-size: 14px;
 }
 
 .group-statistics-table-wrap {
@@ -974,17 +975,17 @@ button { cursor: pointer; }
 }
 .group-statistics-table {
   width: 100%;
-  min-width: 2140px;
+  min-width: 1740px;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .group-statistics-table th {
   position: sticky;
   top: 0;
   z-index: 2;
-  height: 44px;
+  height: 48px;
   padding: 0;
   border-bottom: 1px solid var(--line-strong);
   background: #eef0ed;
@@ -992,7 +993,7 @@ button { cursor: pointer; }
 }
 .group-statistics-table th button {
   width: 100%;
-  height: 44px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1001,15 +1002,15 @@ button { cursor: pointer; }
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 760;
   text-align: left;
 }
 .group-statistics-table th button:hover { background: #e4e8e4; color: var(--text); }
 .group-statistics-table th i { min-width: 12px; color: #7b867f; font-style: normal; }
 .group-statistics-table td {
-  height: 46px;
-  padding: 9px 12px;
+  height: 50px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   background: white;
   white-space: nowrap;
@@ -1033,7 +1034,7 @@ button { cursor: pointer; }
   content: '数据不完整';
   margin-left: 7px;
   color: var(--red);
-  font-size: 9px;
+  font-size: 10px;
 }
 .statistics-run-link {
   max-width: 190px;
@@ -1042,6 +1043,7 @@ button { cursor: pointer; }
   border: 0;
   background: transparent;
   color: var(--text);
+  font-size: inherit;
   font-weight: 720;
   text-align: left;
   text-overflow: ellipsis;

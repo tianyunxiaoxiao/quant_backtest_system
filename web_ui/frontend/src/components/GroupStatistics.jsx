@@ -18,14 +18,11 @@ const columns = [
   { key: 'annual_volatility', label: '年化波动', type: 'pct' },
   { key: 'sharpe', label: 'Sharpe', type: 'num' },
   { key: 'max_drawdown', label: '最大回撤', type: 'pct' },
-  { key: 'benchmark_total_return', label: '基准累计收益', type: 'pct' },
-  { key: 'excess_total_return_geometric', label: '超额累计收益', type: 'pct' },
   { key: 'excess_annual_return_geometric', label: '超额年化', type: 'pct' },
   { key: 'excess_sharpe', label: '超额夏普', type: 'num' },
   { key: 'excess_max_drawdown', label: '超额最大回撤', type: 'pct' },
   { key: 'excess_volatility', label: '超额波动率', type: 'pct' },
   { key: 'information_ratio', label: '信息比率 IR', type: 'num' },
-  { key: 'beta', label: 'Beta', type: 'num' },
 ]
 
 const rawValue = (row, column) => column.value ? column.value(row) : row.metrics?.[column.key]
